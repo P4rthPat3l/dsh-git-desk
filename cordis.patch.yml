@@ -1,0 +1,4 @@
+- insert:
+    - id: dsh-git-desk
+      name: 'dsh-git-desk'
+      config: {}

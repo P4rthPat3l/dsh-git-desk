@@ -1,0 +1,7 @@
+# Feature documents
+
+| ID | Feature | Document | Lifecycle | Implementation | Owner |
+| --- | --- | --- | --- | --- | --- |
+| FEAT-001 | Git integration | [FEAT-001-git-integration.md](FEAT-001-git-integration.md) | proposed | not_started | Parth Patel |
+
+New documents take the next unused `FEAT-` number and keep the section numbering of the template.

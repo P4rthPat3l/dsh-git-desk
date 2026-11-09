@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Git · DeepSeek Harness</title>
+<link rel="stylesheet" href="fonts/fonts.css">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <svg class="brand-mark" width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+        <rect width="18" height="18" rx="5" fill="var(--accent)"></rect>
+        <path d="M4 7c1.7 0 2.4 1.15 5 1.15S12.3 7 14 7M4 11c1.7 0 2.4 1.15 5 1.15S12.3 11 14 11" stroke="#fff" stroke-width="1.35" fill="none" stroke-linecap="round"></path>
+      </svg>
+      <span class="brand-name">DeepSeek Harness</span>
+    </div>
+    <div class="topbar-center">
+      <span class="crumb-muted">default-workspace</span>
+      <span class="crumb-sep">/</span>
+      <span class="crumb-current">Git</span>
+    </div>
+    <div class="topbar-actions">
+      <button class="icon-btn" data-action="toast" data-toast="Search is not part of this prototype" title="Search">
+        <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
+      </button>
+      <button class="icon-btn" id="themeToggle" title="Toggle theme">
+        <svg class="icon-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg>
+        <svg class="icon-moon" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"></path></svg>
+      </button>
+      <div class="avatar avatar-sm">PP</div>
+    </div>
+  </header>
+
+  <div class="shell">
+    <aside class="sidebar">
+      <button class="new-session" data-action="toast" data-toast="Opening a new session is outside this prototype">
+        <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"></path></svg>
+        <span>New session</span>
+        <kbd>⌘N</kbd>
+      </button>
+
+      <div class="side-section">
+        <div class="side-label">
+          Workspaces
+          <button class="mini-btn" data-action="toast" data-toast="Add workspace"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"></path></svg></button>
+        </div>
+        <div class="workspace-row">
+          <svg class="ws-icon" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"></path></svg>
+          <span class="ws-name">default-workspace</span>
+          <span class="ws-count">3</span>
+        </div>
+        <div class="session-list">
+          <div class="session-row active">
+            <span class="session-dot dot-git"></span>
+            <span class="session-title">Git integration for DSH</span>
+            <span class="session-time">now</span>
+          </div>
+          <div class="session-row">
+            <span class="session-dot"></span>
+            <span class="session-title">Diff viewer polish</span>
+            <span class="session-time">2h</span>
+          </div>
+          <div class="session-row">
+            <span class="session-dot"></span>
+            <span class="session-title">Plugin packaging notes</span>
+            <span class="session-time">1d</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="sidebar-spacer"></div>
+      <button class="side-foot" data-action="toast" data-toast="Settings lives in the harness shell">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.11-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6h.09A1.7 1.7 0 0 0 10 3.05V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9v.09a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51 1Z"></path></svg>
+        <span>Settings</span>
+      </button>
+    </aside>
+
+    <main class="main">
+      <section class="git" id="git">
+        <header class="git-head" id="gitHead"></header>
+        <div class="work" id="work"></div>
+        <footer class="git-status" id="gitStatus"></footer>
+      </section>
+    </main>
+  </div>
+</div>
+
+<div id="modalRoot"></div>
+<div id="menuRoot"></div>
+<div id="toastRoot" class="toast-root"></div>
+
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

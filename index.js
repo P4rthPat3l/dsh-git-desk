@@ -1,0 +1,16 @@
+import { createRuntime } from './lib/exec.js';
+import { registerGitRoute } from './lib/http.js';
+import { createHandler } from './lib/rpc.js';
+
+export const inject = ['subprocess', 'workspaceRegistry', 'connection', 'webServer'];
+
+/**
+ * Expose one authenticated HTTP channel. The browser half owns no Git state;
+ * every read and every write goes through this channel and returns a fresh
+ * status snapshot.
+ */
+export function apply(ctx) {
+  const runtime = createRuntime(ctx.subprocess);
+  const handler = createHandler(ctx, runtime);
+  ctx.effect(() => registerGitRoute(ctx, handler), 'dsh-git: authenticated Git channel');
+}
