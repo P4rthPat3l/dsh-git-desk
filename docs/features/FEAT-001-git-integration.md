@@ -287,7 +287,7 @@ Every command runs with `LC_ALL=C`, `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS
 | AC-031 | The minus in the Staged header unstages every staged file in one request, and the files return to Unstaged with their local changes intact. Its tooltip reads `Unstage all`. |
 | AC-032 | The diff toolbar shows the current change and the change count. The arrows move to the previous or next change and scroll both sides to it in split view, and the single pane in unified view. They are disabled when no change lies in that direction, and the count follows manual scrolling. |
 | AC-033 | The sparkle menu offers **Write a commit message** and **Create a branch and commit**. With nothing staged both rows are disabled; with an unresolved conflict the branch row is disabled and the message row stays available. A failed model call shows its message in the error banner and leaves the field unchanged. |
-| AC-034 | **Write a commit message** sends the staged patch and the last five commit subjects to the model selected in Settings, fills the message field with one cleaned `type(scope): summary` line, and never commits. **Create a branch and commit** fills the same message, derives the branch name from it, and opens the branch dialog; the commit happens only after the user confirms. |
+| AC-034 | **Write a commit message** sends the staged patch and the last five commit subjects to the configured model, fills the message field with a cleaned `type(scope): summary` title and, when the model writes one, a short body, and never commits. **Create a branch and commit** fills the same message, derives the branch name from the title line only, and opens the branch dialog; the commit happens only after the user confirms. |
 | AC-035 | The two-panel architecture is consistent across all modes: Panel 1 is the navigation/action area on the left (Changes lists / History commit list & details / Stash list) and Panel 2 is the full-height Diff Preview on the right. |
 | AC-036 | In History mode, selecting a commit shows its commit metadata and changed files list in Panel 1, and automatically displays the full-height diff for the selected file in Panel 2. Root/orphan commits (where `parents[0]` is undefined) diff cleanly against an empty tree without throwing. |
 | AC-037 | Every control and surface uses DSH native design tokens (`--dsw-*`): segmented tab capsule with `--dsw-alias-bg-module-platform`, elevated tab indicator with `--dsw-alias-bg-layer-3`, rounded control radii (`--dsw-radius-sm/md/lg`), and subtle hairline dividers (`--dsw-alias-border-l1/l2`). |
@@ -413,7 +413,7 @@ Status is partial: the core flows work, and the remaining gaps are named rather 
 | Full-file split diff, paired rows, word highlights | Done. Covered by the host run and the client bundle run. |
 | Stage and unstage a whole file, or every file in a section | Done. |
 | Previous and next change with a change count | Done. |
-| AI commit message and AI branch and commit | Done. Host call through `ctx.llm`; the model comes from Settings. |
+| AI commit message and AI branch and commit | Done. Host call through `ctx.llm`; the model comes from Settings and can be overridden on the Git settings page. |
 | Horizontal mode tabs, two-panel body | Done. |
 | Stage one unstaged block, unstage one staged block | Done. Index blobs verified in the host run. |
 | Revert one local block with confirmation | Done. Confirmation is required by the host, not only the dialog. |

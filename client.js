@@ -182,6 +182,23 @@ window.__ModuleLoader__.load({
       'stash.selectAll': 'Select all',
       'stash.deselectAll': 'Deselect all',
       'header.label': 'Git panel',
+      'settings.section': 'Git',
+      'settings.model': 'AI model',
+      'settings.modelHint': 'Used by the commit message actions. The default follows the Composer selection, including later changes.',
+      'settings.modelSame': 'Same as Composer',
+      'settings.modelEmpty': 'No models are available in this build.',
+      'settings.modelFailed': 'The model list could not be read.',
+      'settings.instruction': 'Commit instructions',
+      'settings.instructionHint': 'These lines shape the wording. The title line type(scope): summary stays required; a short body is welcome.',
+      'settings.instructionReset': 'Restore default',
+      'settings.instructionFailed': 'The default instructions could not be read.',
+      'command.toggle': 'Open or collapse the Git panel',
+      'command.commit': 'Commit staged changes',
+      'command.writeMessage': 'Write the commit message with AI',
+      'command.stageAll': 'Stage all changes',
+      'command.openFirst': 'Open the Git panel first',
+      'command.nothingToStage': 'No changed files to stage',
+      'command.notReady': 'Stage a file and write a message first',
     };
 
     const ZH = {
@@ -358,6 +375,23 @@ window.__ModuleLoader__.load({
       'stash.selectAll': '全选',
       'stash.deselectAll': '全不选',
       'header.label': 'Git 面板',
+      'settings.section': 'Git',
+      'settings.model': 'AI 模型',
+      'settings.modelHint': '用于生成提交信息。默认跟随输入框选择的模型，之后切换也会跟随。',
+      'settings.modelSame': '与输入框相同',
+      'settings.modelEmpty': '此版本没有可用模型。',
+      'settings.modelFailed': '无法读取模型列表。',
+      'settings.instruction': '提交信息指令',
+      'settings.instructionHint': '这些内容决定措辞，标题行 type(scope): 摘要始终必填，可以再写一段说明。',
+      'settings.instructionReset': '恢复默认',
+      'settings.instructionFailed': '无法读取默认指令。',
+      'command.toggle': '打开或收起 Git 面板',
+      'command.commit': '提交已暂存的更改',
+      'command.writeMessage': '用 AI 写提交信息',
+      'command.stageAll': '暂存全部更改',
+      'command.openFirst': '请先打开 Git 面板',
+      'command.nothingToStage': '没有可暂存的更改',
+      'command.notReady': '请先暂存文件并填写提交信息',
     };
 
     const STORE_LAYOUT = 'dsh-git.layout';
@@ -412,6 +446,71 @@ window.__ModuleLoader__.load({
       return source;
     }
 
+    // Model override and commit instructions for the AI actions. Stored in
+    // this browser, the same way the harness keeps its own key bindings.
+    const STORE_PREFS = 'dsh-git.preferences.v1';
+
+    function readPrefs() {
+      const empty = { model: null, instruction: '' };
+      const raw = readStore(STORE_PREFS, '');
+      if (raw === '') return empty;
+      try {
+        const parsed = JSON.parse(raw);
+        return {
+          model: readPair(parsed?.model),
+          instruction: typeof parsed?.instruction === 'string' ? parsed.instruction : '',
+        };
+      } catch {
+        return empty;
+      }
+    }
+
+    const prefs = (() => {
+      let current = readPrefs();
+      const listeners = new Set();
+      return {
+        hook: {
+          getSnapshot: () => current,
+          subscribe(listener) {
+            listeners.add(listener);
+            return () => {
+              listeners.delete(listener);
+            };
+          },
+        },
+        set(next) {
+          current = {
+            model: readPair(next.model),
+            instruction: typeof next.instruction === 'string' ? next.instruction : '',
+          };
+          writeStore(STORE_PREFS, JSON.stringify(current));
+          for (const listener of [...listeners]) listener();
+        },
+      };
+    })();
+
+    // The select carries the pair as JSON so no separator can collide with a
+    // provider or model id.
+    function pairValue(pair) {
+      return JSON.stringify({ provider: pair.provider, model: pair.model });
+    }
+
+    function readPair(value) {
+      if (value === null || typeof value !== 'object') return null;
+      if (typeof value.provider !== 'string' || value.provider === '') return null;
+      if (typeof value.model !== 'string' || value.model === '') return null;
+      return { provider: value.provider, model: value.model };
+    }
+
+    function parsePair(text) {
+      try {
+        return readPair(JSON.parse(text));
+      } catch {
+        // A stored or selected value we cannot read changes nothing.
+        return null;
+      }
+    }
+
     function cx(...names) {
       return names.filter(Boolean).join(' ');
     }
@@ -457,7 +556,8 @@ window.__ModuleLoader__.load({
     }
 
     function defaultBranchName(message, firstPath) {
-      const fromMessage = slugify(message);
+      // Only the title names the branch; a commit body must not leak into it.
+      const fromMessage = slugify(String(message ?? '').split(/\r?\n/)[0]);
       if (fromMessage !== '') return fromMessage;
       const base = firstPath ? splitPath(firstPath).base.replace(/\.[^.]+$/, '') : 'changes';
       const slug = slugify(base) || 'changes';
@@ -885,6 +985,18 @@ button[data-forge-header]{display:none}
 .gitp-root.is-compact .gitp-diffcol{width:100%;flex:1;min-height:0;height:auto}
 .gitp-root.is-compact .gitp-diff-head{gap:6px;padding:0 4px}
 .gitp-root.is-compact .gitp-error{margin:0 8px 8px}
+.gitp-settings{--gitp-hair:var(--dsh-hairline-width,.5px);--gitp-ring:var(--dsw-alias-state-business-primary);display:flex;flex-direction:column;gap:24px;max-width:640px}
+.gitp-settings-row{display:flex;flex-direction:column;gap:8px}
+.gitp-settings-copy{display:flex;flex-direction:column;gap:2px}
+.gitp-settings-label{font-size:13px;line-height:20px;font-weight:500;color:var(--dsw-alias-label-primary)}
+.gitp-settings-hint{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary)}
+.gitp-settings-error{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-state-error-primary)}
+.gitp-settings select,.gitp-settings textarea{width:100%;padding:0 10px;border:var(--gitp-hair) solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-sm,8px);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px;transition:border-color 120ms ease}
+.gitp-settings select{height:36px}
+.gitp-settings textarea{height:132px;padding:8px 10px;resize:vertical}
+.gitp-settings select:focus,.gitp-settings textarea:focus{outline:none;border-color:var(--dsw-alias-state-business-primary)}
+.gitp-settings select:focus-visible,.gitp-settings textarea:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:1px}
+.gitp-settings-actions{display:flex;justify-content:flex-end}
 `;
 
     // The stylesheet is needed outside the panel too, for the session header
@@ -1508,6 +1620,7 @@ button[data-forge-header]{display:none}
               value: message,
               onChange: (event) => onMessage(event.target.value),
               onKeyDown: (event) => {
+                if (event.defaultPrevented) return;
                 if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
                   event.preventDefault();
                   if (canCommit && !commitBusy) onCommit();
@@ -3073,6 +3186,28 @@ button[data-forge-header]{display:none}
         [reportVisible],
       );
 
+      // Global commands run outside React, so the tab body publishes the
+      // actions it owns while it is mounted. Replaced on every render to see
+      // current staged files and busy flags.
+      useEffect(() => {
+        panelBridge = {
+          visible: tab.visible === true,
+          canStageAll: () => unstaged.length > 0 && busy === null,
+          stageAll: () => toggleAll('unstaged'),
+          canCommit: () => canCommit && busy === null,
+          commit: () => doCommit(),
+          canWriteMessage: () => staged.length > 0 && busy === null && !aiBusy,
+          writeMessage: () => aiWrite(),
+        };
+      });
+
+      useEffect(
+        () => () => {
+          panelBridge = null;
+        },
+        [],
+      );
+
       const workspaces = useWorkspaces((state) => state.items);
       const session = useSessions((state) => state.byId[sessionId]);
       const workspace =
@@ -3440,9 +3575,12 @@ button[data-forge-header]{display:none}
         setAiBusy(true);
         setError(null);
         try {
+          const settings = prefs.hook.getSnapshot();
           const result = await call('aiMessage', {
             workspaceId: workspace.workspaceId,
             repo: repoRoot,
+            ...(settings.model === null ? {} : { model: settings.model }),
+            ...(settings.instruction.trim() === '' ? {} : { instruction: settings.instruction }),
           });
           if (typeof result?.model === 'string' && result.model !== '') {
             setToast(t('ai.written', { model: result.model }));
@@ -3890,6 +4028,226 @@ button[data-forge-header]{display:none}
       );
     }
 
+    // The actions a mounted Git tab publishes to global commands. Null while
+    // no tab body is on screen.
+    let panelBridge = null;
+
+    function GitSettingsSection({ t, call, usePrefs, savePrefs }) {
+      const stored = usePrefs((value) => value);
+      const [catalog, setCatalog] = useState(null);
+      const [failed, setFailed] = useState(false);
+
+      useEffect(() => {
+        const controller = new AbortController();
+        let live = true;
+        call('preferences', {}, controller.signal).then(
+          (value) => {
+            if (live) setCatalog(value);
+          },
+          () => {
+            if (live) setFailed(true);
+          },
+        );
+        return () => {
+          live = false;
+          controller.abort();
+        };
+      }, [call]);
+
+      const groups = Array.isArray(catalog?.groups) ? catalog.groups : [];
+      const selected = stored.model === null ? '' : pairValue(stored.model);
+      const listed =
+        stored.model !== null &&
+        groups.some(
+          (group) =>
+            group.id === stored.model.provider &&
+            group.models.some((model) => model.id === stored.model.model),
+        );
+      const instruction =
+        stored.instruction === '' ? (typeof catalog?.instruction === 'string' ? catalog.instruction : '') : stored.instruction;
+      const loading = catalog === null && !failed;
+
+      return h(
+        'div',
+        { className: 'gitp-settings' },
+        h(
+          'div',
+          { className: 'gitp-settings-row' },
+          h(
+            'div',
+            { className: 'gitp-settings-copy' },
+            h('label', { className: 'gitp-settings-label', htmlFor: 'gitp-settings-model' }, t('settings.model')),
+            h('p', { className: 'gitp-settings-hint' }, t('settings.modelHint')),
+          ),
+          h(
+            'select',
+            {
+              id: 'gitp-settings-model',
+              value: selected,
+              disabled: loading,
+              onChange: (event) => {
+                const value = event.target.value;
+                if (value === '') {
+                  savePrefs({ ...stored, model: null });
+                  return;
+                }
+                const next = parsePair(value);
+                if (next !== null) savePrefs({ ...stored, model: next });
+              },
+            },
+            h('option', { value: '' }, t('settings.modelSame')),
+            listed || stored.model === null
+              ? null
+              : h(
+                  'option',
+                  { value: selected },
+                  `${stored.model.provider} · ${stored.model.model}`,
+                ),
+            groups.map((group) =>
+              h(
+                'optgroup',
+                { key: group.id, label: group.label },
+                group.models.map((model) =>
+                  h(
+                    'option',
+                    { key: model.id, value: pairValue({ provider: group.id, model: model.id }) },
+                    model.name,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          failed ? h('p', { className: 'gitp-settings-error' }, t('settings.modelFailed')) : null,
+          !failed && catalog !== null && groups.length === 0
+            ? h('p', { className: 'gitp-settings-error' }, t('settings.modelEmpty'))
+            : null,
+        ),
+        h(
+          'div',
+          { className: 'gitp-settings-row' },
+          h(
+            'div',
+            { className: 'gitp-settings-copy' },
+            h(
+              'label',
+              { className: 'gitp-settings-label', htmlFor: 'gitp-settings-instruction' },
+              t('settings.instruction'),
+            ),
+            h('p', { className: 'gitp-settings-hint' }, t('settings.instructionHint')),
+          ),
+          h('textarea', {
+            id: 'gitp-settings-instruction',
+            value: instruction,
+            spellCheck: false,
+            disabled: loading,
+            onChange: (event) => savePrefs({ ...stored, instruction: event.target.value }),
+          }),
+          h(
+            'div',
+            { className: 'gitp-settings-actions' },
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'gitp-btn is-small',
+                disabled: stored.instruction === '',
+                onClick: () => savePrefs({ ...stored, instruction: '' }),
+              },
+              t('settings.instructionReset'),
+            ),
+          ),
+          failed ? h('p', { className: 'gitp-settings-error' }, t('settings.instructionFailed')) : null,
+        ),
+      );
+    }
+
+    function GitSettingsIcon() {
+      return h(GitMark, { size: 16 });
+    }
+
+    /**
+     * Commands for the native Keyboard shortcuts dialog. Every binding starts
+     * unassigned: the catalog lists the action and the user records a key.
+     */
+    function gitCommands(ctx, t) {
+      const blocked = (reason) => ({ status: 'blocked', reason });
+      const regions = ['page', 'editable', 'terminal'];
+      const panel = (name) => {
+        const bridge = panelBridge;
+        if (bridge === null || !bridge.visible) return blocked(t('command.openFirst'));
+        return name(bridge);
+      };
+      return [
+        {
+          id: 'git.panel.toggle',
+          label: () => t('command.toggle'),
+          aliases: ['git', 'source control', 'toggle panel'],
+          defaults: {},
+          regions,
+          modals: [],
+          resolve: () => ({
+            status: 'handled',
+            run: () => {
+              const active = ctx.sidebarRight.active();
+              // A collapsed column still reports its active tab, so the
+              // expanded state decides whether this press closes or opens.
+              if (ctx.sidebarRight.isExpanded() && active !== undefined && active.kind === 'git') {
+                ctx.sidebarRight.hide(active.id);
+                return;
+              }
+              try {
+                ctx.sidebarRight.openTab('git');
+              } catch {
+                // No Session surface to open into; the command stays silent.
+              }
+            },
+          }),
+        },
+        {
+          id: 'git.stageAll',
+          label: () => t('command.stageAll'),
+          aliases: ['git', 'stage'],
+          defaults: {},
+          regions,
+          modals: [],
+          resolve: () =>
+            panel((bridge) =>
+              bridge.canStageAll()
+                ? { status: 'handled', run: () => bridge.stageAll() }
+                : blocked(t('command.nothingToStage')),
+            ),
+        },
+        {
+          id: 'git.commit',
+          label: () => t('command.commit'),
+          aliases: ['git', 'commit'],
+          defaults: {},
+          regions,
+          modals: [],
+          resolve: () =>
+            panel((bridge) =>
+              bridge.canCommit()
+                ? { status: 'handled', run: () => bridge.commit() }
+                : blocked(t('command.notReady')),
+            ),
+        },
+        {
+          id: 'git.writeMessage',
+          label: () => t('command.writeMessage'),
+          aliases: ['git', 'commit message', 'ai'],
+          defaults: {},
+          regions,
+          modals: [],
+          resolve: () =>
+            panel((bridge) =>
+              bridge.canWriteMessage()
+                ? { status: 'handled', run: () => bridge.writeMessage() }
+                : blocked(t('command.notReady')),
+            ),
+        },
+      ];
+    }
+
     return {
       inject: ['connection', 'slots', 'locale', 'sidebarRightTabs', 'sidebarRight'],
       apply(ctx) {
@@ -3941,6 +4299,27 @@ button[data-forge-header]{display:none}
             GitHeaderButton,
           ),
         );
+        ctx.slots.inject('settings.section', () =>
+          ctx.slots.register(
+            {
+              name: 'settings.section',
+              id: 'git',
+              order: 25,
+              label: () => t('settings.section'),
+              locale: NS,
+              inject: () => ({ t, call, savePrefs: prefs.set, hooks: { prefs: prefs.hook } }),
+            },
+            GitSettingsSection,
+          ),
+        );
+        ctx.slots.inject('settings.section.icon', () =>
+          ctx.slots.register({ name: 'settings.section.icon', id: 'git', order: 25 }, GitSettingsIcon),
+        );
+        ctx.inject(['shortcuts'], (scope) => {
+          for (const command of gitCommands(ctx, t)) {
+            scope.effect(() => scope.shortcuts.register(command), `dsh-git: ${command.id}`);
+          }
+        });
         ctx.slots.inject('sidebar.right.pane.tab', () =>
           ctx.slots.register(
             {
