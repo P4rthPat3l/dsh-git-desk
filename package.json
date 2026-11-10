@@ -1,6 +1,6 @@
 {
   "name": "dsh-git-desk",
-  "version": "0.18.1",
+  "version": "0.19.0",
   "type": "module",
   "description": "Git desk for DeepSeek Harness: a right-sidebar Git workbench with full-file side-by-side diffs, block staging, commits, history, branches, stash, and sync.",
   "keywords": [
@@ -26,16 +26,15 @@
     "url": "https://github.com/P4rthPat3l/dsh-git-desk/issues"
   },
   "exports": {
-    ".": "./index.js",
+    ".": "./dist/host/index.js",
     "./client": "./client.js",
     "./locale/*.json": "./locale/*.json",
     "./icon": "./icon.svg"
   },
   "files": [
-    "index.js",
+    "dist",
     "client.js",
     "cordis.patch.yml",
-    "lib",
     "locale/*.json",
     "icon.svg",
     "LICENSE",
@@ -59,5 +58,20 @@
         "@deepseek-ai/dsh-client-ui-workspace"
       ]
     }
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc -p src/host/tsconfig.json && node scripts/build.mjs",
+    "typecheck": "tsc -p src/host/tsconfig.json --noEmit && tsc -p src/client/tsconfig.json",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "@types/react": "^18.3.31",
+    "@types/react-dom": "^18.3.7",
+    "esbuild": "^0.25.0",
+    "jsdom": "^25.0.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.9.3"
   }
 }

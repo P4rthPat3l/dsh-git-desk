@@ -228,12 +228,12 @@ Every command runs with `LC_ALL=C`, `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS
 | --- | --- | --- |
 | `dsh-git/package.json` | Implemented | Bundle manifest, `dsh.client`, exports |
 | `dsh-git/cordis.patch.yml` | Implemented | One host row, `dsh-git-desk` |
-| `dsh-git/index.js` | Implemented | Host entry and `/git-rpc` registration |
-| `dsh-git/lib/exec.js` | Implemented | Spawn, env, timeout, cancellation, filesystem reads for discovery |
-| `dsh-git/lib/parse.js` | Implemented | Porcelain v2, numstat, hunks, full-file rows, log, stash |
-| `dsh-git/lib/git.js` | Implemented | Repository discovery, status, diff, block writes, branch create and checkout, commit, sync, log, stash, conflicts |
-| `dsh-git/lib/rpc.js` | Implemented | Endpoint dispatch, repository validation, workspace resolution |
-| `dsh-git/lib/http.js` | Implemented | Authenticated JSON envelope |
+| `dsh-git/src/host/index.ts` | Implemented | Host entry and `/git-rpc` registration |
+| `dsh-git/src/host/lib/exec.ts` | Implemented | Spawn, env, timeout, cancellation, filesystem reads for discovery |
+| `dsh-git/src/host/lib/parse.ts` | Implemented | Porcelain v2, numstat, hunks, full-file rows, log, stash |
+| `dsh-git/src/host/lib/git.ts` | Implemented | Repository discovery, status, diff, block writes, branch create and checkout, commit, sync, log, stash, conflicts |
+| `dsh-git/src/host/lib/rpc.ts` | Implemented | Endpoint dispatch, repository validation, workspace resolution |
+| `dsh-git/src/host/lib/http.ts` | Implemented | Authenticated JSON envelope |
 | `dsh-git/client.js` | Implemented | Right-tab body and title, session header button, repository picker, session auto-open, branch menu and new-branch dialog, Start-guide card, compact and wide layouts, split and unified diff, dialogs, locales, styles |
 | `dsh-git/locale/en.json`, `dsh-git/locale/zh.json` | Implemented | Plugin Manager metadata |
 | `dsh-git/icon.svg` | Implemented | Plugin icon |

@@ -1,10 +1,17 @@
 import { lstat, readFile, readdir, realpath, stat, writeFile } from 'node:fs/promises';
+import type { Dirent, Stats } from 'node:fs';
+import type { SpawnHandle, SubprocessService } from './types.js';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const NETWORK_TIMEOUT_MS = 180_000;
 
+/** One Git failure with a stable code. */
 export class GitError extends Error {
-  constructor(code, message, details = {}) {
+  readonly code: string;
+
+  readonly details: Record<string, unknown>;
+
+  constructor(code: string, message: string, details: Record<string, unknown> = {}) {
     super(message);
     this.name = 'GitError';
     this.code = code;
@@ -12,16 +19,73 @@ export class GitError extends Error {
   }
 }
 
+/** One finished command. */
+export interface RunResult {
+  code: number;
+  stdout: string;
+  stderr: string;
+}
+
+/** What one run call accepts. */
+export interface RunOptions {
+  timeoutMs?: number;
+  network?: boolean;
+  signal?: AbortSignal;
+  input?: string;
+}
+
+/** One file read as text. */
+export interface TextFile {
+  text: string;
+  binary: boolean;
+  size: number;
+}
+
+/** The filesystem and process helpers the Git endpoints use. */
+export interface GitRuntime {
+  run(cwd: string, args: string[], options?: RunOptions): Promise<RunResult>;
+  readText(path: string): Promise<TextFile | null>;
+  readBuffer(path: string): Promise<Buffer | null>;
+  writeText(path: string, text: string): Promise<void>;
+  statPath(path: string): Promise<Stats | null>;
+  lstatPath(path: string): Promise<Stats | null>;
+  readdir(path: string): Promise<Dirent[]>;
+  realpath(path: string): Promise<string>;
+}
+
+/**
+ * Read the `code` of a filesystem failure.
+ * @param error the thrown value.
+ * @returns the errno name, or undefined when it is not an errno failure.
+ */
+function errnoCode(error: unknown): string | undefined {
+  if (!(error instanceof Error) || !('code' in error)) return undefined;
+  const { code } = error as { code: unknown };
+  return typeof code === 'string' ? code : undefined;
+}
+
+/**
+ * Tell a missing path apart from a real failure.
+ * @param error the thrown value.
+ * @returns whether the path is simply absent.
+ */
+function isMissing(error: unknown): boolean {
+  const code = errnoCode(error);
+  return code === 'ENOENT' || code === 'EISDIR' || code === 'ENOTDIR';
+}
+
 /**
  * Run one managed child process and collect both streams.
  * The provider owns cancellation. This wrapper only adds a wall clock and
  * folds a spawn failure into a normal command result so callers can show it.
+ * @param subprocess the harness subprocess service.
+ * @returns the runtime helpers.
  */
-export function createRuntime(subprocess) {
-  let gitPath;
-  let gitPathError;
+export function createRuntime(subprocess: SubprocessService): GitRuntime {
+  let gitPath: string | undefined;
+  let gitPathError: GitError | undefined;
 
-  async function resolveGit() {
+  async function resolveGit(): Promise<string> {
     if (gitPath !== undefined) return gitPath;
     if (gitPathError !== undefined) throw gitPathError;
     try {
@@ -35,12 +99,12 @@ export function createRuntime(subprocess) {
     }
   }
 
-  async function run(cwd, args, options = {}) {
+  async function run(cwd: string, args: string[], options: RunOptions = {}): Promise<RunResult> {
     const executable = await resolveGit();
-    const timeoutMs = options.timeoutMs ?? (options.network ? NETWORK_TIMEOUT_MS : DEFAULT_TIMEOUT_MS);
+    const timeoutMs = options.timeoutMs ?? (options.network === true ? NETWORK_TIMEOUT_MS : DEFAULT_TIMEOUT_MS);
     const timeout = AbortSignal.timeout(timeoutMs);
     const signal = options.signal === undefined ? timeout : AbortSignal.any([timeout, options.signal]);
-    const env = {
+    const env: Record<string, string | undefined> = {
       ...process.env,
       LC_ALL: 'C',
       LANG: 'C',
@@ -49,7 +113,7 @@ export function createRuntime(subprocess) {
       GIT_PAGER: 'cat',
       PAGER: 'cat',
     };
-    let handle;
+    let handle: SpawnHandle;
     try {
       handle = subprocess.spawn({
         argv: [executable, ...args],
@@ -80,7 +144,9 @@ export function createRuntime(subprocess) {
           args,
         });
       }
-      if (options.signal?.aborted) throw new GitError('git/cancelled', 'The Git command was cancelled.', { args });
+      if (options.signal?.aborted === true) {
+        throw new GitError('git/cancelled', 'The Git command was cancelled.', { args });
+      }
       throw new GitError('git/failed', 'Git failed to run.', {
         args,
         cause: error instanceof Error ? error.message : String(error),
@@ -89,7 +155,7 @@ export function createRuntime(subprocess) {
 
     const stdout = handle.collected.stdout?.readFrom(0);
     const stderr = handle.collected.stderr?.readFrom(0);
-    if (stdout?.lossy) {
+    if (stdout?.lossy === true) {
       throw new GitError('git/output-too-large', 'Git returned more output than the panel can read.', {
         args,
         spillPath: stdout.spillPath,
@@ -102,7 +168,7 @@ export function createRuntime(subprocess) {
     };
   }
 
-  async function readText(path) {
+  async function readText(path: string): Promise<TextFile | null> {
     try {
       const bytes = await readFile(path);
       const text = bytes.toString('utf8');
@@ -112,7 +178,7 @@ export function createRuntime(subprocess) {
         size: bytes.length,
       };
     } catch (error) {
-      if (error && (error.code === 'ENOENT' || error.code === 'EISDIR' || error.code === 'ENOTDIR')) return null;
+      if (isMissing(error)) return null;
       throw new GitError('git/read-failed', `Could not read ${path}.`, {
         path,
         cause: error instanceof Error ? error.message : String(error),
@@ -120,11 +186,11 @@ export function createRuntime(subprocess) {
     }
   }
 
-  async function readBuffer(path) {
+  async function readBuffer(path: string): Promise<Buffer | null> {
     try {
       return await readFile(path);
     } catch (error) {
-      if (error && (error.code === 'ENOENT' || error.code === 'EISDIR' || error.code === 'ENOTDIR')) return null;
+      if (isMissing(error)) return null;
       throw new GitError('git/read-failed', `Could not read ${path}.`, {
         path,
         cause: error instanceof Error ? error.message : String(error),
@@ -132,11 +198,11 @@ export function createRuntime(subprocess) {
     }
   }
 
-  async function writeText(path, text) {
+  async function writeText(path: string, text: string): Promise<void> {
     await writeFile(path, text, 'utf8');
   }
 
-  async function statPath(path) {
+  async function statPath(path: string): Promise<Stats | null> {
     try {
       return await stat(path);
     } catch {
@@ -144,7 +210,7 @@ export function createRuntime(subprocess) {
     }
   }
 
-  async function lstatPath(path) {
+  async function lstatPath(path: string): Promise<Stats | null> {
     try {
       return await lstat(path);
     } catch {
@@ -152,7 +218,7 @@ export function createRuntime(subprocess) {
     }
   }
 
-  async function readdirPath(path) {
+  async function readdirPath(path: string): Promise<Dirent[]> {
     try {
       return await readdir(path, { withFileTypes: true });
     } catch {
@@ -160,7 +226,7 @@ export function createRuntime(subprocess) {
     }
   }
 
-  async function realpathPath(path) {
+  async function realpathPath(path: string): Promise<string> {
     return realpath(path);
   }
 

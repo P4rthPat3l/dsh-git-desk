@@ -56,6 +56,17 @@ Writes rebuild the exact index blob from the versions the diff came from, verify
 
 Commit messages can be written by the model selected in Settings. The Host sends the staged patch and the last five commit subjects to that provider only when the sparkle action runs. The message is cleaned to one `type(scope): summary` line before it reaches the field.
 
+Both halves are TypeScript. `src/host/` compiles to `dist/`, which is the package entry, and `src/client/` is bundled into `client.js` in the harness module-loader format. The shapes the two halves exchange are in `src/contract.ts`.
+
+```bash
+npm install
+npm run typecheck  # strict tsc over src/host and src/client
+npm test           # host entry and route, bundle registration and first render
+npm run build      # compile dist/ and rebuild client.js
+```
+
+The built output is committed, because the profile links this folder and the harness imports it without a build step. Edit `src/` and rebuild; never edit `dist/` or `client.js` by hand.
+
 Details, endpoint table, and verification are in [`docs/implementation.md`](docs/implementation.md).
 
 ## Limits in this version

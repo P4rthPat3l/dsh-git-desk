@@ -134,8 +134,8 @@ Command definitions:
 | File | Role |
 | --- | --- |
 | `client.js` | Preferences store, settings section, icon, command definitions, bridge, request fields |
-| `lib/ai.js` | Instruction and model resolution, `preferences` projection |
-| `lib/rpc.js` | `preferences` endpoint before workspace resolution, `aiMessage` fields |
+| `src/host/lib/ai.ts` | Instruction and model resolution, `preferences` projection |
+| `src/host/lib/rpc.ts` | `preferences` endpoint before workspace resolution, `aiMessage` fields |
 
 ## 12. Business rules
 

@@ -2,6 +2,8 @@
 
 The Git bundle is implemented and installed in the `web` profile. The host half is active. The client half is a right-sidebar tab type, contributed to the Host client graph and loaded on the next window reload.
 
+Both halves are TypeScript. `src/host/` compiles with `tsc` to `dist/`, which is the package entry; `src/client/` is bundled by esbuild to `client.js` in the harness module-loader format. The wire shapes the two halves exchange live in `src/contract.ts`. `npm run typecheck` checks both projects, `npm test` loads the built bundle in jsdom and the compiled host entry in Node, and `npm run build` produces `dist/` and `client.js`. The built output is committed because the profile links this folder and the harness imports it without a build step.
+
 ## Package
 
 The package name is `dsh-git-desk`. The source folder stays `dsh-git`. The bundle row id, the insert name, and the client module id are `dsh-git-desk`. The right-sidebar slot keys stay `dsh-git`, so the UI keys and stored layout preferences did not change.
@@ -12,14 +14,21 @@ The package name is `dsh-git-desk`. The source folder stays `dsh-git`. The bundl
 | --- | --- |
 | `package.json` | Bundle manifest, `dsh.client`, locale and icon exports |
 | `cordis.patch.yml` | One host row, `dsh-git-desk` |
-| `index.js` | Host entry, `/git-rpc` route registration |
-| `lib/exec.js` | `ctx.subprocess` runner, timeout, cancellation, error mapping |
-| `lib/parse.js` | Porcelain v2, numstat, zero-context hunks, full-file rows, log, stash |
-| `lib/git.js` | Status, versions, diff, block edits, commit, branch, sync, log, stash, conflicts, history actions |
-| `lib/rpc.js` | Endpoint dispatch and workspace resolution |
-| `lib/http.js` | Authenticated `/git-rpc` envelope over `ctx.connection.admit` |
-| `lib/ai.js` | One `ctx.llm` call over the staged patch; model comes from `agentDefaultModel` |
-| `client.js` | Right-sidebar tab body and title, Start-guide card, compact and wide layouts, split and unified diff, commit menu, dialogs, locales, styles |
+| `src/contract.ts` | Wire shapes shared by both halves |
+| `src/host/index.ts` | Host entry, `/git-rpc` route registration |
+| `src/host/lib/types.ts` | Host service contracts: subprocess, workspace registry, connection, web server |
+| `src/host/lib/exec.ts` | `ctx.subprocess` runner, timeout, cancellation, error mapping |
+| `src/host/lib/parse.ts` | Porcelain v2, numstat, zero-context hunks, full-file rows, log, stash |
+| `src/host/lib/git.ts` | Status, versions, diff, block edits, commit, branch, sync, log, stash, conflicts, history actions |
+| `src/host/lib/rpc.ts` | Endpoint dispatch, payload narrowing, workspace resolution |
+| `src/host/lib/http.ts` | Authenticated `/git-rpc` envelope over `ctx.connection.admit` |
+| `src/host/lib/ai.ts` | One `ctx.llm` call over the staged patch; model comes from `agentDefaultModel` |
+| `dist/` | Compiled host output; the package entry is `dist/host/index.js` |
+| `src/client/main.ts` | Right-sidebar tab body and title, Start-guide card, compact and wide layouts, split and unified diff, commit menu, dialogs, locales, styles |
+| `src/client/harness.ts` | The client services the harness injects |
+| `client.js` | Built client bundle in the module-loader format |
+| `scripts/build.mjs` | esbuild bundle and loader wrapper |
+| `tests/host.test.mjs`, `tests/client.test.mjs` | Host entry and route, bundle registration and first render |
 | `locale/en.json`, `locale/zh.json` | Plugin Manager title and description |
 | `icon.svg` | Plugin Manager icon |
 
@@ -113,7 +122,7 @@ The run reported `add/delete block cases passed`.
 
 Full RPC to Git test:
 
-- The real `lib/rpc.js` and `lib/http.js` stack served status, diff, block stage, untracked stage, commit, and log against a temporary repository.
+- The real `src/host/lib/rpc.ts` and `src/host/lib/http.ts` stack served status, diff, block stage, untracked stage, commit, and log against a temporary repository.
 - A `../etc/passwd` path returned `git/invalid-path`.
 
 The run reported `e2e host channel: all checks passed`.
@@ -210,10 +219,10 @@ Not verified live: the running app was booted before the rename and this change,
 
 ## Verified, 0.16.0 preferences and key bindings
 
-- `node --check client.js`, `lib/ai.js`, and `lib/rpc.js` passed.
+- `npm run typecheck` and `npm run build` passed.
 - `npx impeccable detect --json client.js` returned `[]`.
 - A key scan read both locale dictionaries: 190 keys each, no missing key, and every `t('...')` literal in `client.js` is defined. `diff.staged` is duplicated in both dictionaries from an earlier release; the copies hold the same text.
-- A scratch script against `lib/ai.js` with a stub context passed five checks: the Composer model is used with no override, a missing model is refused, an explicit pair overrides the Composer selection, an instruction replaces the style paragraph while the format rules stay, and `preferences` groups providers and skips one that refuses `listModels`.
+- A scratch script against `src/host/lib/ai.ts` with a stub context passed five checks: the Composer model is used with no override, a missing model is refused, an explicit pair overrides the Composer selection, an instruction replaces the style paragraph while the format rules stay, and `preferences` groups providers and skips one that refuses `listModels`.
 - `cleanMessage` was checked on a plain title, a title with a body, a fenced reply with a `Commit message:` label, runs of blank lines, a missing title, and a reply longer than the 2,000 character cap.
 
 Not verified live: the settings section and the shortcut recorder were not seen in the running page. This session has no window capture, so the placement of the section, the select rendering, and the recorded binding need one look after a page reload.
@@ -231,7 +240,7 @@ Not verified live: dragging the divider, the arrow-key step, the reset, and the 
 
 ## Verified, 0.18.0 history commit actions
 
-Host rules, against a temporary repository, through the real `lib/git.js` functions and a local Git runtime. The run reported `32 passed, 0 failed`. It covered:
+Host rules, against a temporary repository, through the real `src/host/lib/git.ts` functions and a local Git runtime. The run reported `32 passed, 0 failed`. It covered:
 
 - Undo moves HEAD to the parent, keeps the message, leaves the change staged, and reports no pending operation.
 - Undo refuses a pending revert, a detached HEAD, the first commit, and a pushed HEAD, while accepting a local-only commit and restoring its change staged.
@@ -247,7 +256,7 @@ Component render, using `CommitActionsMenu` and `ResetDialog` extracted from `cl
 
 A module smoke test loaded `client.js` with a stubbed loader and React and applied the plugin. The five slot registrations appeared, and the module reported `client module loads and registers`.
 
-Static checks: `node --check lib/git.js`, `node --check lib/rpc.js`, and `node --check client.js` passed. The stylesheet balanced 318 braces over 39,574 characters. Both locale dictionaries hold 231 keys with no miss, and every literal `t('...')` key resolves. `npx impeccable detect --json client.js` returned `[]`.
+Static checks: `npm run typecheck` passed over both projects, and `npm run build` produced `dist/` and `client.js`. The stylesheet balanced 318 braces over 39,574 characters. Both locale dictionaries hold 231 keys with no miss, and every literal `t('...')` key resolves. `npx impeccable detect --json client.js` returned `[]`.
 
 Not verified live: the menu, the confirms, the reset dialog, and the switch to Changes with a filled message. The running page still serves the bundle from before this change, and this session did not render the panel.
 
@@ -264,3 +273,7 @@ The diff header now carries an Open in editor button. It builds the file address
 Static checks: `node --check client.js` passed. The diff renders the button only when the view is not binary and the caller passed an open callback; the History call site passes none.
 
 Live verification, 2026-11-10: with `client.js` selected in Changes, the button opened a new editor tab at line 11, the first change, with the landing band. The first version of the patch read `repoRoot` inside `ChangesView`, where it is not defined, and the click threw. The handler now lives in `GitPanel` as `openInEditor` and reaches `DiffView` through `ChangesView` as the `onOpen` prop. The address is built from `repoRoot` and the Session working directory, which are both in `GitPanel` scope.
+
+## Verified, 0.19.0 TypeScript port
+
+Both halves moved to strict TypeScript with no behavior change. `src/host/` compiles to `dist/` and `src/client/` is bundled to `client.js`; the wire shapes live in `src/contract.ts`. `npm run typecheck` reports no errors over either project, `npm test` passes five tests (host entry contract, one prefix route, bundle exports, tab type and slot registrations with four commands, and a jsdom render of the panel root), and the profile resolves the package to `dist/host/index.js` with the expected four injected services. The port also removed two latent defects: a duplicate `diff.staged` key in both dictionaries, and reads of a per-commit-file `status` field the host never sends.

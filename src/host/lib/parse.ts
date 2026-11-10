@@ -1,7 +1,71 @@
-const STATUS_LETTERS = new Set(['A', 'C', 'D', 'M', 'R', 'T', 'U', 'X']);
+import type {
+  BranchState,
+  DiffBlockRange,
+  DiffRow,
+  EntryKind,
+  LogCommit,
+  ParsedEntry,
+  StashEntry,
+} from '../../contract.js';
 
-/** Split a porcelain record after its fixed leading fields, keeping spaces in the path. */
-function splitFields(record, count) {
+const STATUS_LETTERS: ReadonlySet<string> = new Set(['A', 'C', 'D', 'M', 'R', 'T', 'U', 'X']);
+
+/** One hunk boundary Git reported. */
+export interface Hunk {
+  oldStart: number;
+  oldCount: number;
+  newStart: number;
+  newCount: number;
+}
+
+/** One entry's line counts. */
+export interface NumstatEntry {
+  add: number | null;
+  del: number | null;
+  binary: boolean;
+}
+
+/** A file split into lines and its trailing newline state. */
+export interface SplitText {
+  lines: string[];
+  trailing: boolean;
+}
+
+/** What the porcelain status parser returns. */
+export interface ParsedStatus {
+  branch: BranchState;
+  entries: ParsedEntry[];
+  merging: boolean;
+  rebasing: boolean;
+}
+
+/** The flags one porcelain code carries. */
+interface EntryFlags {
+  index: string;
+  worktree: string;
+  conflicted: boolean;
+  untracked: boolean;
+  staged: boolean;
+  unstaged: boolean;
+  letter: string;
+  both: boolean;
+}
+
+/** A row set with its change blocks. */
+export interface BuiltRows {
+  rows: DiffRow[];
+  blocks: DiffBlockRange[];
+  add: number;
+  del: number;
+}
+
+/**
+ * Split a porcelain record after its fixed leading fields, keeping spaces in the path.
+ * @param record the record.
+ * @param count the number of fields to skip.
+ * @returns the prefix and the path, or null when the record is short.
+ */
+function splitFields(record: string, count: number): [string, string] | null {
   let index = 0;
   for (let field = 0; field < count; field += 1) {
     const space = record.indexOf(' ', index);
@@ -11,11 +75,17 @@ function splitFields(record, count) {
   return [record.slice(0, index - 1), record.slice(index)];
 }
 
-function branchCode(entry, xy) {
-  const index = xy[0];
-  const worktree = xy[1];
-  const conflicted = entry.kind === 'u' || entry.kind === 'unmerged' || index === 'U' || worktree === 'U';
-  const untracked = entry.kind === '?' || entry.kind === 'untracked';
+/**
+ * Read the two-letter porcelain code into display flags.
+ * @param entry the entry being built.
+ * @param xy the two-letter code.
+ * @returns the flags.
+ */
+function branchCode(entry: { kind: EntryKind }, xy: string): EntryFlags {
+  const index = xy[0] ?? '.';
+  const worktree = xy[1] ?? '.';
+  const conflicted = entry.kind === 'unmerged' || index === 'U' || worktree === 'U';
+  const untracked = entry.kind === 'untracked';
   const staged = !untracked && index !== '.' && index !== '?';
   const unstaged = untracked || (worktree !== '.' && worktree !== '?');
   let letter = 'M';
@@ -38,8 +108,13 @@ function branchCode(entry, xy) {
   };
 }
 
-export function parseStatus(text) {
-  const branch = {
+/**
+ * Parse one porcelain v2 status document.
+ * @param text the document.
+ * @returns the branch, entries, and operation flags.
+ */
+export function parseStatus(text: string): ParsedStatus {
+  const branch: BranchState = {
     oid: null,
     name: null,
     upstream: null,
@@ -48,9 +123,9 @@ export function parseStatus(text) {
     detached: false,
     initial: false,
   };
-  const entries = [];
+  const entries: ParsedEntry[] = [];
   let skipNext = false;
-  let pendingRename = null;
+  let pendingRename: ParsedEntry | null = null;
 
   for (const record of text.split('\0')) {
     if (record === '') continue;
@@ -75,7 +150,7 @@ export function parseStatus(text) {
         branch.upstream = value;
       } else if (key === 'branch.ab') {
         const match = /^\+(\d+) -(\d+)$/.exec(value);
-        if (match) {
+        if (match !== null) {
           branch.ahead = Number(match[1]);
           branch.behind = Number(match[2]);
         }
@@ -86,16 +161,15 @@ export function parseStatus(text) {
     if (record.startsWith('1 ')) {
       const fields = splitFields(record, 8);
       if (fields === null) continue;
-      const xy = fields[0].split(' ')[1];
-      const entry = { path: fields[1], kind: 'tracked', ...branchCode({ kind: 'tracked' }, xy) };
-      entries.push(entry);
+      const xy = fields[0].split(' ')[1] ?? '.';
+      entries.push({ path: fields[1], kind: 'tracked', ...branchCode({ kind: 'tracked' }, xy) });
       continue;
     }
     if (record.startsWith('2 ')) {
       const fields = splitFields(record, 9);
       if (fields === null) continue;
-      const xy = fields[0].split(' ')[1];
-      const entry = {
+      const xy = fields[0].split(' ')[1] ?? '.';
+      const entry: ParsedEntry = {
         path: fields[1],
         kind: 'renamed',
         from: null,
@@ -109,7 +183,7 @@ export function parseStatus(text) {
     if (record.startsWith('u ')) {
       const fields = splitFields(record, 10);
       if (fields === null) continue;
-      const xy = fields[0].split(' ')[1];
+      const xy = fields[0].split(' ')[1] ?? '.';
       entries.push({ path: fields[1], kind: 'unmerged', ...branchCode({ kind: 'unmerged' }, xy) });
       continue;
     }
@@ -132,27 +206,38 @@ export function parseStatus(text) {
   };
 }
 
-export function parseNumstat(text) {
-  const result = new Map();
+/**
+ * Parse one numstat document.
+ * @param text the document.
+ * @returns the counts per path.
+ */
+export function parseNumstat(text: string): Map<string, NumstatEntry> {
+  const result = new Map<string, NumstatEntry>();
   for (const record of text.split('\0')) {
     if (record === '') continue;
     const parts = record.split('\t');
     if (parts.length < 3) continue;
     const path = parts.slice(2).join('\t');
-    const add = parts[0] === '-' ? null : Number(parts[0]);
-    const del = parts[1] === '-' ? null : Number(parts[1]);
+    const rawAdd = parts[0] ?? '';
+    const rawDel = parts[1] ?? '';
+    const add = rawAdd === '-' ? null : Number(rawAdd);
+    const del = rawDel === '-' ? null : Number(rawDel);
     result.set(path, {
-      add: Number.isFinite(add) ? add : null,
-      del: Number.isFinite(del) ? del : null,
+      add: add !== null && Number.isFinite(add) ? add : null,
+      del: del !== null && Number.isFinite(del) ? del : null,
       binary: add === null || del === null,
     });
   }
   return result;
 }
 
-/** Parse the zero-context hunk boundaries Git already computed. */
-export function parseHunks(patch) {
-  const hunks = [];
+/**
+ * Parse the zero-context hunk boundaries Git already computed.
+ * @param patch the patch text.
+ * @returns the hunks.
+ */
+export function parseHunks(patch: string): Hunk[] {
+  const hunks: Hunk[] = [];
   for (const line of patch.split('\n')) {
     if (!line.startsWith('@@ ')) continue;
     const match = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
@@ -167,7 +252,12 @@ export function parseHunks(patch) {
   return hunks;
 }
 
-export function splitLines(text) {
+/**
+ * Split text into lines, remembering whether it ended with a newline.
+ * @param text the text.
+ * @returns the lines and the trailing newline state.
+ */
+export function splitLines(text: string): SplitText {
   if (text === '') return { lines: [], trailing: false };
   const lines = text.split('\n');
   let trailing = false;
@@ -178,7 +268,13 @@ export function splitLines(text) {
   return { lines, trailing };
 }
 
-export function joinLines(lines, trailing) {
+/**
+ * Join lines back into text.
+ * @param lines the lines.
+ * @param trailing whether the text ends with a newline.
+ * @returns the text.
+ */
+export function joinLines(lines: string[], trailing: boolean): string {
   if (lines.length === 0) return '';
   return lines.join('\n') + (trailing ? '\n' : '');
 }
@@ -187,14 +283,19 @@ export function joinLines(lines, trailing) {
  * Build display rows from two complete versions and Git's hunk boundaries.
  * Every unchanged line becomes a context row, so the caller can render the
  * full file without asking Git for context.
+ *
+ * @param leftLines the old version.
+ * @param rightLines the new version.
+ * @param hunks the hunk boundaries.
+ * @returns the rows, blocks, and line counts.
  */
-export function buildRows(leftLines, rightLines, hunks) {
-  const rows = [];
-  const blocks = [];
+export function buildRows(leftLines: string[], rightLines: string[], hunks: Hunk[]): BuiltRows {
+  const rows: DiffRow[] = [];
+  const blocks: DiffBlockRange[] = [];
   let left = 0;
   let right = 0;
 
-  const pushContext = (count) => {
+  const pushContext = (count: number): void => {
     for (let index = 0; index < count; index += 1) {
       rows.push({ l: left + 1, r: right + 1, k: 'ctx' });
       left += 1;
@@ -278,42 +379,52 @@ export function buildRows(leftLines, rightLines, hunks) {
   return { rows, blocks, add, del };
 }
 
-export function parseLog(text) {
-  const commits = [];
+/**
+ * Parse one log document.
+ * @param text the document.
+ * @returns the commits.
+ */
+export function parseLog(text: string): LogCommit[] {
+  const commits: LogCommit[] = [];
   for (const record of text.split('\x1e')) {
     const raw = record.trim();
     if (raw === '') continue;
     const [rawHash, parents, author, email, date, refs, subject] = raw.split('\x00');
     const hash = rawHash?.trim();
-    if (!hash) continue;
+    if (hash === undefined || hash === '') continue;
     commits.push({
       hash,
-      parents: parents ? parents.split(' ').filter(Boolean) : [],
-      author,
-      email,
-      date,
-      refs: refs
-        ? refs
-            .split(', ')
-            .map((ref) => ref.trim())
-            .filter(Boolean)
-        : [],
-      subject,
+      parents: parents !== undefined && parents !== '' ? parents.split(' ').filter(Boolean) : [],
+      author: author ?? '',
+      email: email ?? '',
+      date: date ?? '',
+      refs:
+        refs !== undefined && refs !== ''
+          ? refs
+              .split(', ')
+              .map((ref) => ref.trim())
+              .filter(Boolean)
+          : [],
+      subject: subject ?? '',
     });
   }
   return commits;
 }
 
-export function parseStashes(text) {
-  const stashes = [];
+/**
+ * Parse one stash list document.
+ * @param text the document.
+ * @returns the stash entries.
+ */
+export function parseStashes(text: string): StashEntry[] {
+  const stashes: StashEntry[] = [];
   for (const record of text.split('\x1e')) {
     const raw = record.trim();
     if (raw === '') continue;
     const [rawRef, message, rawHash] = raw.split('\x00');
     const ref = rawRef?.trim();
-    const hash = rawHash?.trim();
-    if (!ref) continue;
-    stashes.push({ ref, message, hash });
+    if (ref === undefined || ref === '') continue;
+    stashes.push({ ref, message: message ?? '', hash: rawHash?.trim() ?? '' });
   }
   return stashes;
 }

@@ -1,8 +1,26 @@
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import {
-  GitError,
-} from './exec.js';
+import type {
+  BranchInfo,
+  CommitDetail,
+  CommitFile,
+  CommitResult,
+  DiffBlock,
+  DiffBlockRange,
+  DiffPayload,
+  DiffSide,
+  OperationResult,
+  RepoInfo,
+  ResetResult,
+  RevertResult,
+  StashEntry,
+  StatusEntry,
+  StatusSnapshot,
+  UndoResult,
+} from '../../contract.js';
+import type { BuiltRows } from './parse.js';
+import { GitError } from './exec.js';
+import type { GitRuntime, RunResult } from './exec.js';
 import {
   buildRows,
   joinLines,
@@ -17,16 +35,133 @@ import {
 const ZERO_CONTEXT = ['-U0', '--no-color', '--no-ext-diff'];
 const MAX_TEXT_BYTES = 5 * 1024 * 1024;
 
-function hashText(text) {
+/** One file read from a blob or the worktree. */
+interface BlobRead {
+  text: string;
+  missing: boolean;
+  binary: boolean;
+  size: number;
+  symlink?: boolean;
+}
+
+/** A diff pair plus its path. */
+interface DiffPair {
+  left: BlobRead;
+  right: BlobRead;
+  worktree?: BlobRead;
+  path: string;
+}
+
+/** Both files of one diff request. */
+interface DiffOptions {
+  path: string;
+  side: DiffSide;
+  commit?: string;
+  parent?: string;
+}
+
+/** One block action request. */
+interface ApplyBlocksOptions {
+  path: string;
+  side: string;
+  blocks: unknown;
+  baseHash: unknown;
+  targetHash: unknown;
+  confirm: unknown;
+}
+
+/** One commit request. */
+interface CommitOptions {
+  message: string;
+  amend: boolean;
+}
+
+/** One branch creation request. */
+interface CreateBranchOptions {
+  name: string;
+}
+
+/** One branch and commit request. */
+interface CreateBranchAndCommitOptions {
+  name: string;
+  message: string;
+}
+
+/** One history request that names a commit. */
+interface CommitRefOptions {
+  hash: string;
+}
+
+/** One reset request. */
+interface ResetOptions {
+  hash: string;
+  mode: string;
+  confirm: boolean;
+}
+
+/** One checkout request. */
+interface CheckoutOptions {
+  branch: string;
+  remote: boolean;
+}
+
+/** One stash push request. */
+interface StashPushOptions {
+  message?: string;
+  paths: unknown;
+  includeUntracked: boolean;
+}
+
+/** One stash apply request. */
+interface StashApplyOptions {
+  ref: string;
+  pop: boolean;
+}
+
+/** One stash drop request. */
+interface StashDropOptions {
+  ref: string;
+}
+
+/** One conflict resolution request. */
+interface ResolveOptions {
+  path: string;
+  side: string;
+}
+
+/** One repository candidate. */
+interface RepoEntry {
+  root: string;
+  name: string;
+  label: string;
+}
+
+/**
+ * Hash one text so a diff can prove the file has not changed since.
+ * @param text the text.
+ * @returns the SHA-1 digest.
+ */
+function hashText(text: string): string {
   return createHash('sha1').update(text).digest('hex');
 }
 
-function failure(result, fallback) {
+/**
+ * Build the failure for a command that did not succeed.
+ * @param result the command result.
+ * @param fallback the message to use when Git printed nothing.
+ * @returns the error.
+ */
+function failure(result: RunResult, fallback: string): GitError {
   const message = result.stderr.trim() || result.stdout.trim() || fallback;
   return new GitError('git/command-failed', message);
 }
 
-function commitHash(value) {
+/**
+ * Validate one commit hash.
+ * @param value the caller value.
+ * @returns the trimmed hash.
+ */
+function commitHash(value: unknown): string {
   const hash = typeof value === 'string' ? value.trim() : '';
   if (!/^[0-9a-f]{4,64}$/i.test(hash)) {
     throw new GitError('git/invalid-commit', 'A commit hash is required.');
@@ -34,7 +169,18 @@ function commitHash(value) {
   return hash;
 }
 
-async function resolveCommit(runtime, root, value) {
+/**
+ * Resolve one commit and its parents.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @param value the caller hash.
+ * @returns the full hash and its parents.
+ */
+async function resolveCommit(
+  runtime: GitRuntime,
+  root: string,
+  value: unknown,
+): Promise<{ hash: string; parents: string[] }> {
   const hash = commitHash(value);
   const resolved = await runtime.run(root, ['rev-parse', '--verify', `${hash}^{commit}`]);
   const full = resolved.stdout.trim();
@@ -47,7 +193,12 @@ async function resolveCommit(runtime, root, value) {
   return { hash: full, parents: fields.slice(1) };
 }
 
-function operationOf(snapshot) {
+/**
+ * Name the operation the repository is in the middle of.
+ * @param snapshot the current status.
+ * @returns the operation name, or null.
+ */
+function operationOf(snapshot: StatusSnapshot): string | null {
   if (snapshot.merging) return 'merge';
   if (snapshot.rebasing) return 'rebase';
   if (snapshot.reverting) return 'revert';
@@ -55,7 +206,11 @@ function operationOf(snapshot) {
   return null;
 }
 
-function refuseOperation(snapshot) {
+/**
+ * Refuse a history change while an operation is pending.
+ * @param snapshot the current status.
+ */
+function refuseOperation(snapshot: StatusSnapshot): void {
   const operation = operationOf(snapshot);
   if (operation !== null) {
     throw new GitError(
@@ -65,7 +220,13 @@ function refuseOperation(snapshot) {
   }
 }
 
-function repoPath(root, value) {
+/**
+ * Normalize one repository-relative path and prove it stays inside the root.
+ * @param root the repository root.
+ * @param value the caller path.
+ * @returns the normalized and absolute paths.
+ */
+function repoPath(root: string, value: unknown): { path: string; absolute: string } {
   if (typeof value !== 'string' || value === '') {
     throw new GitError('git/invalid-path', 'A file path is required.');
   }
@@ -87,22 +248,48 @@ function repoPath(root, value) {
   return { path: normalized, absolute };
 }
 
-function validateBlock(block) {
-  const numeric = (value) => Number.isInteger(value) && value >= 0;
+/**
+ * Validate one block range from the client.
+ * @param block the caller block.
+ * @returns the block range.
+ */
+function validateBlock(block: unknown): DiffBlockRange {
+  const numeric = (value: unknown): value is number => Number.isInteger(value) && Number(value) >= 0;
+  if (block === null || typeof block !== 'object') {
+    throw new GitError('git/invalid-block', 'A block range is invalid.');
+  }
+  const candidate = block as Record<string, unknown>;
   if (
-    block === null ||
-    typeof block !== 'object' ||
-    !numeric(block.leftStart) ||
-    !numeric(block.leftEnd) ||
-    !numeric(block.rightStart) ||
-    !numeric(block.rightEnd)
+    !numeric(candidate.leftStart) ||
+    !numeric(candidate.leftEnd) ||
+    !numeric(candidate.rightStart) ||
+    !numeric(candidate.rightEnd)
   ) {
     throw new GitError('git/invalid-block', 'A block range is invalid.');
   }
-  return block;
+  const kind = candidate.kind;
+  if (kind !== 'add' && kind !== 'del' && kind !== 'mod') {
+    throw new GitError('git/invalid-block', 'A block kind is invalid.');
+  }
+  const row = candidate.row;
+  return {
+    leftStart: candidate.leftStart,
+    leftEnd: candidate.leftEnd,
+    rightStart: candidate.rightStart,
+    rightEnd: candidate.rightEnd,
+    kind,
+    row: typeof row === 'number' ? row : 0,
+  };
 }
 
-async function readBlob(runtime, root, spec) {
+/**
+ * Read one blob from the object database.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @param spec the object spec.
+ * @returns the blob as text.
+ */
+async function readBlob(runtime: GitRuntime, root: string, spec: string): Promise<BlobRead> {
   const result = await runtime.run(root, ['show', spec]);
   if (result.code !== 0) {
     return { text: '', missing: true, binary: false, size: 0 };
@@ -115,7 +302,14 @@ async function readBlob(runtime, root, spec) {
   };
 }
 
-async function readWorktree(runtime, root, value) {
+/**
+ * Read one worktree file, refusing symlinks and oversized files.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @param value the caller path.
+ * @returns the file as text.
+ */
+async function readWorktree(runtime: GitRuntime, root: string, value: string): Promise<BlobRead> {
   const target = repoPath(root, value);
   const link = await runtime.lstatPath(target.absolute);
   if (link !== null && link.isSymbolicLink()) {
@@ -129,7 +323,14 @@ async function readWorktree(runtime, root, value) {
   return { text: read.text, missing: false, binary: read.binary, symlink: false, size: read.size };
 }
 
-async function readPair(runtime, root, options) {
+/**
+ * Read both files of one diff request.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @param options the diff request.
+ * @returns the pair and its path.
+ */
+async function readPair(runtime: GitRuntime, root: string, options: DiffOptions): Promise<DiffPair> {
   const value = repoPath(root, options.path);
   if (options.side === 'staged') {
     const left = await readBlob(runtime, root, `HEAD:${value.path}`);
@@ -154,7 +355,7 @@ async function readPair(runtime, root, options) {
       throw new GitError('git/invalid-commit', 'A commit hash is required.');
     }
     const left =
-      parent && /^[0-9a-f]{4,64}$/i.test(parent)
+      parent !== '' && /^[0-9a-f]{4,64}$/i.test(parent)
         ? await readBlob(runtime, root, `${parent}:${value.path}`)
         : { text: '', missing: true, binary: false, size: 0 };
     const right = await readBlob(runtime, root, `${commit}:${value.path}`);
@@ -163,7 +364,20 @@ async function readPair(runtime, root, options) {
   throw new GitError('git/invalid-side', 'Unknown diff side.');
 }
 
-async function patchFor(runtime, root, options, value) {
+/**
+ * Read the zero-context patch for one file.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @param options the diff request.
+ * @param value the normalized path.
+ * @returns the patch text.
+ */
+async function patchFor(
+  runtime: GitRuntime,
+  root: string,
+  options: DiffOptions,
+  value: string,
+): Promise<string> {
   if (options.side === 'unstaged') {
     const result = await runtime.run(root, ['diff', ...ZERO_CONTEXT, '--', value]);
     return result.code === 0 ? result.stdout : '';
@@ -176,7 +390,7 @@ async function patchFor(runtime, root, options, value) {
     const commit = typeof options.commit === 'string' ? options.commit.trim() : '';
     const parent = typeof options.parent === 'string' ? options.parent.trim() : '';
     const args =
-      parent && /^[0-9a-f]{4,64}$/i.test(parent)
+      parent !== '' && /^[0-9a-f]{4,64}$/i.test(parent)
         ? ['diff', ...ZERO_CONTEXT, parent, commit, '--', value]
         : ['show', '--format=', ...ZERO_CONTEXT, commit, '--', value];
     const result = await runtime.run(root, args);
@@ -185,7 +399,13 @@ async function patchFor(runtime, root, options, value) {
   return '';
 }
 
-async function readStatus(runtime, root) {
+/**
+ * Read the full repository status.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @returns the snapshot.
+ */
+async function readStatus(runtime: GitRuntime, root: string): Promise<StatusSnapshot> {
   const porcelain = await runtime.run(root, ['status', '--porcelain=v2', '--branch', '-z', '-uall']);
   if (porcelain.code !== 0) throw failure(porcelain, 'Git status failed.');
   const parsed = parseStatus(porcelain.stdout);
@@ -197,13 +417,13 @@ async function readStatus(runtime, root) {
   const unstaged = parseNumstat(unstagedResult.code === 0 ? unstagedResult.stdout : '');
   const staged = parseNumstat(stagedResult.code === 0 ? stagedResult.stdout : '');
 
-  const entries = [];
+  const entries: StatusEntry[] = [];
   for (const entry of parsed.entries) {
     const work = unstaged.get(entry.path);
     const index = staged.get(entry.path);
-    let add = work?.add ?? 0;
-    let del = work?.del ?? 0;
-    let binary = Boolean(work?.binary || index?.binary);
+    let add: number | null = work?.add ?? 0;
+    let del: number | null = work?.del ?? 0;
+    let binary = work?.binary === true || index?.binary === true;
     if (entry.untracked) {
       const read = await readWorktree(runtime, root, entry.path);
       binary = read.binary;
@@ -246,14 +466,26 @@ async function readStatus(runtime, root) {
   };
 }
 
-export async function findRepository(runtime, directory) {
+/**
+ * Find the repository that owns a directory.
+ * @param runtime the runtime helpers.
+ * @param directory the directory.
+ * @returns the root, or null.
+ */
+export async function findRepository(runtime: GitRuntime, directory: string): Promise<string | null> {
   const result = await runtime.run(directory, ['rev-parse', '--show-toplevel']);
   if (result.code !== 0) return null;
   const root = result.stdout.trim();
   return root === '' ? null : root;
 }
 
-export async function initRepository(runtime, directory) {
+/**
+ * Initialize a repository in one directory.
+ * @param runtime the runtime helpers.
+ * @param directory the directory.
+ * @returns the fresh snapshot.
+ */
+export async function initRepository(runtime: GitRuntime, directory: string): Promise<StatusSnapshot> {
   const result = await runtime.run(directory, ['init']);
   if (result.code !== 0) throw failure(result, 'Git could not initialize this directory.');
   const root = await findRepository(runtime, directory);
@@ -263,14 +495,26 @@ export async function initRepository(runtime, directory) {
 
 const REPO_SCAN_DEPTH = 2;
 const REPO_SCAN_LIMIT = 40;
-const REPO_SKIP = new Set(['node_modules', '.dsh']);
+const REPO_SKIP: ReadonlySet<string> = new Set(['node_modules', '.dsh']);
 
-async function isRepoRoot(runtime, directory) {
+/**
+ * Tell whether a directory is a repository root.
+ * @param runtime the runtime helpers.
+ * @param directory the directory.
+ * @returns whether it holds a `.git` entry.
+ */
+async function isRepoRoot(runtime: GitRuntime, directory: string): Promise<boolean> {
   return (await runtime.lstatPath(path.join(directory, '.git'))) !== null;
 }
 
-export async function discoverRepositories(runtime, workspacePath) {
-  const found = new Map();
+/**
+ * List the repositories inside one workspace.
+ * @param runtime the runtime helpers.
+ * @param workspacePath the workspace root.
+ * @returns the repositories, workspace first.
+ */
+export async function discoverRepositories(runtime: GitRuntime, workspacePath: string): Promise<RepoInfo[]> {
+  const found = new Map<string, string>();
   let workspace = workspacePath;
   try {
     workspace = await runtime.realpath(workspacePath);
@@ -279,7 +523,7 @@ export async function discoverRepositories(runtime, workspacePath) {
   }
   const root = await findRepository(runtime, workspace);
   if (root !== null) found.set(root, root);
-  async function scan(directory, depth) {
+  async function scan(directory: string, depth: number): Promise<void> {
     if (found.size >= REPO_SCAN_LIMIT || depth > REPO_SCAN_DEPTH) return;
     const entries = await runtime.readdir(directory);
     for (const entry of entries) {
@@ -296,7 +540,7 @@ export async function discoverRepositories(runtime, workspacePath) {
   }
   await scan(workspace, 1);
   return [...found.values()]
-    .map((repoRoot) => ({
+    .map((repoRoot): RepoEntry => ({
       root: repoRoot,
       name: path.relative(workspace, repoRoot) || '.',
       label: path.basename(repoRoot),
@@ -304,20 +548,31 @@ export async function discoverRepositories(runtime, workspacePath) {
     .sort((a, b) => (a.name === '.' ? -1 : b.name === '.' ? 1 : a.name.localeCompare(b.name)));
 }
 
-export async function resolveRepository(runtime, workspacePath, requested) {
-  if (typeof requested !== 'string' || requested.trim() === '') {
+/**
+ * Resolve a requested repository inside one workspace.
+ * @param runtime the runtime helpers.
+ * @param workspacePath the workspace root.
+ * @param requested the requested root.
+ * @returns the repository root.
+ */
+export async function resolveRepository(
+  runtime: GitRuntime,
+  workspacePath: string,
+  requested: string,
+): Promise<string> {
+  if (requested.trim() === '') {
     throw new GitError('git/no-repository', 'Choose a repository first.');
   }
   if (!path.isAbsolute(requested.trim())) {
     throw new GitError('git/repo-invalid', 'Choose the repository root.');
   }
-  let workspace;
+  let workspace: string;
   try {
     workspace = await runtime.realpath(workspacePath);
   } catch {
     workspace = workspacePath;
   }
-  let target;
+  let target: string;
   try {
     target = await runtime.realpath(requested.trim());
   } catch {
@@ -336,11 +591,24 @@ export async function resolveRepository(runtime, workspacePath, requested) {
   return root;
 }
 
-export async function status(runtime, root) {
+/**
+ * Read the repository status.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @returns the snapshot.
+ */
+export async function status(runtime: GitRuntime, root: string): Promise<StatusSnapshot> {
   return readStatus(runtime, root);
 }
 
-export async function diff(runtime, root, options) {
+/**
+ * Build one full-file diff.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @param options the diff request.
+ * @returns the diff payload.
+ */
+export async function diff(runtime: GitRuntime, root: string, options: DiffOptions): Promise<DiffPayload> {
   const pair = await readPair(runtime, root, options);
   const labels =
     options.side === 'staged'
@@ -352,7 +620,7 @@ export async function diff(runtime, root, options) {
           : { left: 'Parent', right: 'Commit' };
 
   if (options.side === 'conflict') {
-    const worktree = pair.worktree;
+    const worktree = pair.worktree ?? { text: '', missing: true, binary: false, size: 0 };
     const text = worktree.text;
     const lines = splitLines(text);
     return {
@@ -414,8 +682,8 @@ export async function diff(runtime, root, options) {
     hunks = [{ oldStart: 1, oldCount: left.lines.length, newStart: 0, newCount: 0 }];
   }
 
-  const built = buildRows(left.lines, right.lines, hunks);
-  const blocks = built.blocks.map((block) => ({
+  const built: BuiltRows = buildRows(left.lines, right.lines, hunks);
+  const blocks: DiffBlock[] = built.blocks.map((block) => ({
     ...block,
     id: `b${block.leftStart}-${block.leftEnd}-${block.rightStart}-${block.rightEnd}`,
   }));
@@ -441,14 +709,26 @@ export async function diff(runtime, root, options) {
   };
 }
 
-async function writeIndex(runtime, root, value, content) {
+/**
+ * Write one new index entry from full file content.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @param value the file path.
+ * @param content the new content.
+ */
+async function writeIndex(
+  runtime: GitRuntime,
+  root: string,
+  value: string,
+  content: string,
+): Promise<void> {
   const target = repoPath(root, value);
   const blob = await runtime.run(root, ['hash-object', '-w', '--stdin'], { input: content });
   if (blob.code !== 0) throw failure(blob, 'Git could not write the new index entry.');
   const hash = blob.stdout.trim();
   const entry = await runtime.run(root, ['ls-files', '-s', '--', target.path]);
   const hasEntry = entry.code === 0 && entry.stdout.trim() !== '';
-  let mode = hasEntry ? entry.stdout.trim().split(' ')[0] : '100644';
+  let mode = hasEntry ? (entry.stdout.trim().split(' ')[0] ?? '100644') : '100644';
   if (!hasEntry) {
     const stat = await runtime.statPath(target.absolute);
     if (stat !== null && (stat.mode & 0o111) !== 0) mode = '100755';
@@ -457,13 +737,32 @@ async function writeIndex(runtime, root, value, content) {
   if (update.code !== 0) throw failure(update, 'Git could not update the index.');
 }
 
-function replaceRange(lines, start, end, replacement) {
+/**
+ * Replace one 1-based line range with new lines.
+ * @param lines the current lines.
+ * @param start the first line to replace, 1-based.
+ * @param end the last line to replace, 1-based.
+ * @param replacement the new lines.
+ * @returns the new lines.
+ */
+function replaceRange(lines: string[], start: number, end: number, replacement: string[]): string[] {
   const begin = Math.max(0, start - 1);
   const stop = Math.max(begin, end);
   return [...lines.slice(0, begin), ...replacement, ...lines.slice(stop)];
 }
 
-export async function applyBlocks(runtime, root, options) {
+/**
+ * Apply or revert selected change blocks.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @param options the block request.
+ * @returns the fresh snapshot.
+ */
+export async function applyBlocks(
+  runtime: GitRuntime,
+  root: string,
+  options: ApplyBlocksOptions,
+): Promise<StatusSnapshot> {
   const value = repoPath(root, options.path);
   if (!Array.isArray(options.blocks) || options.blocks.length === 0 || options.blocks.length > 200) {
     throw new GitError('git/invalid-block', 'Select at least one block.');
@@ -555,7 +854,14 @@ export async function applyBlocks(runtime, root, options) {
   return readStatus(runtime, root);
 }
 
-export async function stagePaths(runtime, root, paths) {
+/**
+ * Stage the named paths.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @param paths the caller paths.
+ * @returns the fresh snapshot.
+ */
+export async function stagePaths(runtime: GitRuntime, root: string, paths: string[]): Promise<StatusSnapshot> {
   const safe = paths.map((value) => repoPath(root, value).path);
   if (safe.length === 0) return readStatus(runtime, root);
   const result = await runtime.run(root, ['add', '--', ...safe]);
@@ -563,7 +869,14 @@ export async function stagePaths(runtime, root, paths) {
   return readStatus(runtime, root);
 }
 
-export async function unstagePaths(runtime, root, paths) {
+/**
+ * Unstage the named paths.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @param paths the caller paths.
+ * @returns the fresh snapshot.
+ */
+export async function unstagePaths(runtime: GitRuntime, root: string, paths: string[]): Promise<StatusSnapshot> {
   const safe = paths.map((value) => repoPath(root, value).path);
   if (safe.length === 0) return readStatus(runtime, root);
   const head = await runtime.run(root, ['rev-parse', '--verify', 'HEAD']);
@@ -575,7 +888,14 @@ export async function unstagePaths(runtime, root, paths) {
   return readStatus(runtime, root);
 }
 
-export async function commit(runtime, root, options) {
+/**
+ * Commit the staged changes.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @param options the commit request.
+ * @returns the new commit and status.
+ */
+export async function commit(runtime: GitRuntime, root: string, options: CommitOptions): Promise<CommitResult> {
   const message = typeof options.message === 'string' ? options.message.trim() : '';
   if (message === '') throw new GitError('git/message-required', 'Write a commit message first.');
   const snapshot = await readStatus(runtime, root);
@@ -604,14 +924,28 @@ export async function commit(runtime, root, options) {
   };
 }
 
-export async function createBranch(runtime, root, options) {
+/**
+ * Create one branch and switch to it.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @param options the branch request.
+ * @returns the command output and status.
+ */
+export async function createBranch(
+  runtime: GitRuntime,
+  root: string,
+  options: CreateBranchOptions,
+): Promise<OperationResult> {
   const name = typeof options.name === 'string' ? options.name.trim() : '';
   if (name === '') throw new GitError('git/branch-required', 'Write a branch name first.');
   const valid = await runtime.run(root, ['check-ref-format', '--branch', name]);
   if (valid.code !== 0) throw new GitError('git/branch-invalid', 'Use a valid branch name.');
   const created = await runtime.run(root, ['checkout', '-b', name]);
   if (created.code !== 0) {
-    throw new GitError('git/branch-failed', created.stderr.trim() || created.stdout.trim() || 'Git could not create the branch.');
+    throw new GitError(
+      'git/branch-failed',
+      created.stderr.trim() || created.stdout.trim() || 'Git could not create the branch.',
+    );
   }
   return {
     output: `${created.stdout}${created.stderr}`.trim(),
@@ -619,7 +953,18 @@ export async function createBranch(runtime, root, options) {
   };
 }
 
-export async function createBranchAndCommit(runtime, root, options) {
+/**
+ * Create one branch and commit the staged changes on it.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @param options the branch and commit request.
+ * @returns the commit result.
+ */
+export async function createBranchAndCommit(
+  runtime: GitRuntime,
+  root: string,
+  options: CreateBranchAndCommitOptions,
+): Promise<CommitResult> {
   const name = typeof options.name === 'string' ? options.name.trim() : '';
   if (name === '') throw new GitError('git/branch-required', 'Write a branch name first.');
   if (!/^[A-Za-z0-9._/-]+$/.test(name)) {
@@ -637,7 +982,7 @@ export async function createBranchAndCommit(runtime, root, options) {
     throw new GitError('git/branch-failed', created.stderr.trim() || 'Git could not create the branch.');
   }
   try {
-    return await commit(runtime, root, { message: options.message });
+    return await commit(runtime, root, { message: options.message, amend: false });
   } catch (error) {
     if (error instanceof GitError) {
       error.message = `Branch ${name} was created, but the commit failed. ${error.message}`;
@@ -646,7 +991,16 @@ export async function createBranchAndCommit(runtime, root, options) {
   }
 }
 
-export async function remoteStatus(runtime, root) {
+/**
+ * Read the remote and upstream state.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @returns the upstream name and the remote.
+ */
+async function remoteStatus(
+  runtime: GitRuntime,
+  root: string,
+): Promise<{ upstream: string | null; hasRemote: boolean; remote: string | null }> {
   const upstream = await runtime.run(root, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
   const remotes = await runtime.run(root, ['remote']);
   const names =
@@ -659,11 +1013,17 @@ export async function remoteStatus(runtime, root) {
   return {
     upstream: upstream.code === 0 ? upstream.stdout.trim() : null,
     hasRemote: names.length > 0,
-    remote: names.includes('origin') ? 'origin' : names[0] ?? null,
+    remote: names.includes('origin') ? 'origin' : (names[0] ?? null),
   };
 }
 
-export async function push(runtime, root) {
+/**
+ * Push the current branch.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @returns the command output and status.
+ */
+export async function push(runtime: GitRuntime, root: string): Promise<OperationResult> {
   const remote = await remoteStatus(runtime, root);
   if (!remote.hasRemote || remote.remote === null) {
     throw new GitError('git/no-remote', 'This repository has no remote.');
@@ -682,7 +1042,13 @@ export async function push(runtime, root) {
   };
 }
 
-export async function pull(runtime, root) {
+/**
+ * Pull fast-forward only.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @returns the command output and status.
+ */
+export async function pull(runtime: GitRuntime, root: string): Promise<OperationResult> {
   const remote = await remoteStatus(runtime, root);
   if (remote.upstream === null) throw new GitError('git/no-upstream', 'This branch has no upstream branch.');
   const result = await runtime.run(root, ['pull', '--ff-only'], { network: true });
@@ -698,7 +1064,13 @@ export async function pull(runtime, root) {
   };
 }
 
-export async function fetch(runtime, root) {
+/**
+ * Fetch from the remote.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @returns the command output and status.
+ */
+export async function fetch(runtime: GitRuntime, root: string): Promise<OperationResult> {
   const remote = await remoteStatus(runtime, root);
   if (!remote.hasRemote) throw new GitError('git/no-remote', 'This repository has no remote.');
   const result = await runtime.run(root, ['fetch'], { network: true });
@@ -711,7 +1083,13 @@ export async function fetch(runtime, root) {
   };
 }
 
-export async function stagedPatch(runtime, root) {
+/**
+ * Read the staged patch for the message writer.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @returns the patch text.
+ */
+export async function stagedPatch(runtime: GitRuntime, root: string): Promise<string> {
   const result = await runtime.run(root, [
     'diff',
     '--cached',
@@ -724,7 +1102,14 @@ export async function stagedPatch(runtime, root) {
   return result.stdout;
 }
 
-export async function recentSubjects(runtime, root, count = 5) {
+/**
+ * Read the most recent commit subjects.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @param count how many to read.
+ * @returns the subjects.
+ */
+export async function recentSubjects(runtime: GitRuntime, root: string, count = 5): Promise<string[]> {
   const result = await runtime.run(root, ['log', `--max-count=${count}`, '--format=%s']);
   if (result.code !== 0) return [];
   return result.stdout
@@ -733,7 +1118,13 @@ export async function recentSubjects(runtime, root, count = 5) {
     .filter((line) => line !== '');
 }
 
-export async function log(runtime, root) {
+/**
+ * Read the commit log.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @returns the commits.
+ */
+export async function log(runtime: GitRuntime, root: string): Promise<{ commits: import('../../contract.js').LogCommit[] }> {
   const format = '%H%x00%P%x00%an%x00%ae%x00%ad%x00%D%x00%s%x1e';
   const result = await runtime.run(root, [
     'log',
@@ -750,7 +1141,18 @@ export async function log(runtime, root) {
   return { commits: parseLog(result.stdout) };
 }
 
-export async function commitDetail(runtime, root, options) {
+/**
+ * Read one commit with its message and files.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @param options the commit request.
+ * @returns the commit detail.
+ */
+export async function commitDetail(
+  runtime: GitRuntime,
+  root: string,
+  options: CommitRefOptions,
+): Promise<CommitDetail> {
   const hash = commitHash(options.hash);
   const meta = await runtime.run(root, [
     'show',
@@ -762,35 +1164,48 @@ export async function commitDetail(runtime, root, options) {
   if (meta.code !== 0) throw failure(meta, 'Git could not read that commit.');
   const fields = meta.stdout.split('\x00');
   const filesResult = await runtime.run(root, ['show', '--numstat', '-z', '--no-renames', '--format=', hash]);
-  const files = [];
+  const files: CommitFile[] = [];
   if (filesResult.code === 0) {
     for (const record of filesResult.stdout.split('\0')) {
       if (record === '') continue;
       const parts = record.split('\t');
       if (parts.length < 3) continue;
-      const add = parts[0] === '-' ? null : Number(parts[0]);
-      const del = parts[1] === '-' ? null : Number(parts[1]);
+      const rawAdd = parts[0] ?? '';
+      const rawDel = parts[1] ?? '';
+      const add = rawAdd === '-' ? null : Number(rawAdd);
+      const del = rawDel === '-' ? null : Number(rawDel);
       files.push({
         path: parts.slice(2).join('\t'),
-        add: Number.isFinite(add) ? add : null,
-        del: Number.isFinite(del) ? del : null,
+        add: add !== null && Number.isFinite(add) ? add : null,
+        del: del !== null && Number.isFinite(del) ? del : null,
         binary: add === null || del === null,
       });
     }
   }
   return {
-    hash: fields[0],
-    parents: fields[1] ? fields[1].split(' ').filter(Boolean) : [],
-    author: fields[2],
-    email: fields[3],
-    date: fields[4],
-    subject: fields[5],
+    hash: fields[0] ?? hash,
+    parents: fields[1] !== undefined && fields[1] !== '' ? fields[1].split(' ').filter(Boolean) : [],
+    author: fields[2] ?? '',
+    email: fields[3] ?? '',
+    date: fields[4] ?? '',
+    subject: fields[5] ?? '',
     body: fields[6] ?? '',
     files,
   };
 }
 
-export async function undoCommit(runtime, root, options) {
+/**
+ * Move the last commit back into the index.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @param options the commit request.
+ * @returns the undo result.
+ */
+export async function undoCommit(
+  runtime: GitRuntime,
+  root: string,
+  options: CommitRefOptions,
+): Promise<UndoResult> {
   const snapshot = await readStatus(runtime, root);
   refuseOperation(snapshot);
   if (snapshot.branch.detached) {
@@ -804,7 +1219,8 @@ export async function undoCommit(runtime, root, options) {
   if (head.stdout.trim() !== target.hash) {
     throw new GitError('git/not-head', 'Only the last commit on the current branch can be undone.');
   }
-  if (target.parents.length === 0) {
+  const parent = target.parents[0];
+  if (parent === undefined) {
     throw new GitError('git/root-commit', 'The first commit has no parent to move back to.');
   }
   if (snapshot.branch.upstream !== null && snapshot.branch.ahead === 0) {
@@ -814,7 +1230,7 @@ export async function undoCommit(runtime, root, options) {
     );
   }
   const logged = await runtime.run(root, ['log', '-1', '--pretty=%B', target.hash]);
-  const reset = await runtime.run(root, ['reset', '--soft', target.parents[0]]);
+  const reset = await runtime.run(root, ['reset', '--soft', parent]);
   if (reset.code !== 0) throw failure(reset, 'Git could not undo the commit.');
   return {
     hash: target.hash,
@@ -824,7 +1240,18 @@ export async function undoCommit(runtime, root, options) {
   };
 }
 
-export async function revertCommit(runtime, root, options) {
+/**
+ * Revert one commit without committing it.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @param options the commit request.
+ * @returns the revert result.
+ */
+export async function revertCommit(
+  runtime: GitRuntime,
+  root: string,
+  options: CommitRefOptions,
+): Promise<RevertResult> {
   const snapshot = await readStatus(runtime, root);
   refuseOperation(snapshot);
   if (snapshot.entries.some((entry) => entry.conflicted)) {
@@ -856,7 +1283,18 @@ export async function revertCommit(runtime, root, options) {
   return { hash: target.hash, conflicted: false, paths: [], message, output, status };
 }
 
-export async function cherryPickCommit(runtime, root, options) {
+/**
+ * Cherry-pick one commit onto the current branch.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @param options the commit request.
+ * @returns the new commit and status.
+ */
+export async function cherryPickCommit(
+  runtime: GitRuntime,
+  root: string,
+  options: CommitRefOptions,
+): Promise<CommitResult> {
   const snapshot = await readStatus(runtime, root);
   refuseOperation(snapshot);
   if (snapshot.entries.some((entry) => entry.conflicted)) {
@@ -901,9 +1339,20 @@ export async function cherryPickCommit(runtime, root, options) {
   };
 }
 
-const RESET_MODES = new Set(['soft', 'mixed', 'hard']);
+const RESET_MODES: ReadonlySet<string> = new Set(['soft', 'mixed', 'hard']);
 
-export async function resetToCommit(runtime, root, options) {
+/**
+ * Reset the current branch to one commit.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @param options the reset request.
+ * @returns the reset result.
+ */
+export async function resetToCommit(
+  runtime: GitRuntime,
+  root: string,
+  options: ResetOptions,
+): Promise<ResetResult> {
   const mode = typeof options.mode === 'string' ? options.mode : '';
   if (!RESET_MODES.has(mode)) {
     throw new GitError('git/invalid-reset-mode', 'Choose soft, mixed, or hard.');
@@ -927,7 +1376,13 @@ export async function resetToCommit(runtime, root, options) {
   };
 }
 
-export async function branches(runtime, root) {
+/**
+ * List local and remote branches.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @returns the branches.
+ */
+export async function branches(runtime: GitRuntime, root: string): Promise<{ branches: BranchInfo[] }> {
   const result = await runtime.run(root, [
     'for-each-ref',
     '--format=%(refname:short)%00%(HEAD)%00%(upstream:short)%00%(refname)',
@@ -935,24 +1390,35 @@ export async function branches(runtime, root) {
     'refs/remotes',
   ]);
   if (result.code !== 0) throw failure(result, 'Git could not list branches.');
-  const list = [];
+  const list: BranchInfo[] = [];
   for (const record of result.stdout.split('\n')) {
     if (record.trim() === '') continue;
     const [name, head, upstream, full] = record.split('\x00');
     if (name === undefined || name === '') continue;
-    if (full?.includes('refs/remotes/') && name.endsWith('/HEAD')) continue;
-    const remote = Boolean(full?.startsWith('refs/remotes/'));
+    if (full?.includes('refs/remotes/') === true && name.endsWith('/HEAD')) continue;
+    const remote = full?.startsWith('refs/remotes/') === true;
     list.push({
       name,
       current: head === '*',
-      upstream: upstream || null,
+      upstream: upstream !== undefined && upstream !== '' ? upstream : null,
       remote,
     });
   }
   return { branches: list };
 }
 
-export async function checkout(runtime, root, options) {
+/**
+ * Check out one branch.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @param options the checkout request.
+ * @returns the command output and status.
+ */
+export async function checkout(
+  runtime: GitRuntime,
+  root: string,
+  options: CheckoutOptions,
+): Promise<OperationResult> {
   const name = typeof options.branch === 'string' ? options.branch.trim() : '';
   if (name === '' || name.startsWith('-') || name.includes('\0')) {
     throw new GitError('git/branch-invalid', 'Choose a branch.');
@@ -967,16 +1433,32 @@ export async function checkout(runtime, root, options) {
   };
 }
 
-export async function stashList(runtime, root) {
+/**
+ * List the stashes.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @returns the stashes.
+ */
+export async function stashList(runtime: GitRuntime, root: string): Promise<{ stashes: StashEntry[] }> {
   const result = await runtime.run(root, ['stash', 'list', '--pretty=format:%gd%x00%gs%x00%H%x1e']);
   if (result.code !== 0) throw failure(result, 'Git could not list stashes.');
   return { stashes: parseStashes(result.stdout) };
 }
 
-export async function stashPush(runtime, root, options) {
-  const message = typeof options.message === 'string' && options.message.trim() !== ''
-    ? options.message.trim()
-    : 'WIP';
+/**
+ * Push the worktree changes onto the stash.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @param options the stash request.
+ * @returns the command output, status, and stashes.
+ */
+export async function stashPush(
+  runtime: GitRuntime,
+  root: string,
+  options: StashPushOptions,
+): Promise<OperationResult & { stashes: StashEntry[] }> {
+  const message =
+    typeof options.message === 'string' && options.message.trim() !== '' ? options.message.trim() : 'WIP';
   const paths = Array.isArray(options.paths) ? options.paths.map((value) => repoPath(root, value).path) : [];
   const args = ['stash', 'push', '-m', message];
   if (options.includeUntracked === true) args.push('-u');
@@ -990,19 +1472,38 @@ export async function stashPush(runtime, root, options) {
   };
 }
 
-function stashRef(value) {
+/**
+ * Validate one stash reference.
+ * @param value the caller ref.
+ * @returns the ref.
+ */
+function stashRef(value: unknown): string {
   if (typeof value !== 'string' || !/^stash@\{\d+\}$/.test(value)) {
     throw new GitError('git/invalid-stash', 'Choose a stash.');
   }
   return value;
 }
 
-export async function stashApply(runtime, root, options) {
+/**
+ * Apply or pop one stash.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @param options the stash request.
+ * @returns the command output, status, and stashes.
+ */
+export async function stashApply(
+  runtime: GitRuntime,
+  root: string,
+  options: StashApplyOptions,
+): Promise<OperationResult & { stashes: StashEntry[] }> {
   const ref = stashRef(options.ref);
   const verb = options.pop === true ? 'pop' : 'apply';
   const result = await runtime.run(root, ['stash', verb, ref]);
   if (result.code !== 0) {
-    throw new GitError('git/stash-failed', result.stderr.trim() || result.stdout.trim() || 'Git could not apply the stash.');
+    throw new GitError(
+      'git/stash-failed',
+      result.stderr.trim() || result.stdout.trim() || 'Git could not apply the stash.',
+    );
   }
   return {
     output: `${result.stdout}${result.stderr}`.trim(),
@@ -1011,7 +1512,18 @@ export async function stashApply(runtime, root, options) {
   };
 }
 
-export async function stashDrop(runtime, root, options) {
+/**
+ * Drop one stash.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @param options the stash request.
+ * @returns the command output, status, and stashes.
+ */
+export async function stashDrop(
+  runtime: GitRuntime,
+  root: string,
+  options: StashDropOptions,
+): Promise<OperationResult & { stashes: StashEntry[] }> {
   const ref = stashRef(options.ref);
   const result = await runtime.run(root, ['stash', 'drop', ref]);
   if (result.code !== 0) throw failure(result, 'Git could not drop the stash.');
@@ -1022,7 +1534,18 @@ export async function stashDrop(runtime, root, options) {
   };
 }
 
-export async function resolveConflict(runtime, root, options) {
+/**
+ * Resolve one conflicted file to one side.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @param options the resolve request.
+ * @returns the fresh snapshot.
+ */
+export async function resolveConflict(
+  runtime: GitRuntime,
+  root: string,
+  options: ResolveOptions,
+): Promise<StatusSnapshot> {
   const value = repoPath(root, options.path);
   if (options.side !== 'ours' && options.side !== 'theirs') {
     throw new GitError('git/invalid-side', 'Choose a conflict side.');
