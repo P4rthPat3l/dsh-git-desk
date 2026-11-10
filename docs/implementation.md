@@ -256,3 +256,11 @@ Not verified live: the menu, the confirms, the reset dialog, and the switch to C
 1. Reload the window once. In the desktop app, `Ctrl+R` reloads the current page. Use a hard reload if the old sidebar entry is still visible.
 2. The tab opens when a session starts. It is closeable for that session; the Start guide card and the tab strip's add control open it again.
 3. The first open discovers the repositories under the session's workspace. Pick one in the header if there is more than one. With none, the panel offers Initialize.
+
+## Verified, 0.18.1 open in editor
+
+The diff header now carries an Open in editor button. It builds the file address with `fileAddressFor`, the same helper as the harness workspace-path util, and calls `ctx.sidebarRight.openResource(address, { params: { line } })`. The line is the working-tree line of the first change in the diff. The History diff and per-line buttons are not included.
+
+Static checks: `node --check client.js` passed. The diff renders the button only when the view is not binary and the caller passed an open callback; the History call site passes none.
+
+Live verification, 2026-11-10: with `client.js` selected in Changes, the button opened a new editor tab at line 11, the first change, with the landing band. The first version of the patch read `repoRoot` inside `ChangesView`, where it is not defined, and the click threw. The handler now lives in `GitPanel` as `openInEditor` and reaches `DiffView` through `ChangesView` as the `onOpen` prop. The address is built from `repoRoot` and the Session working directory, which are both in `GitPanel` scope.

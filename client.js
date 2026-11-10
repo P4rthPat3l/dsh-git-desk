@@ -8,6 +8,50 @@ window.__ModuleLoader__.load({
     const NS = 'git';
     const GIT_TAB_ID = 'dsh-git';
 
+    const FILE_ADDRESS_PREFIX = 'dsh-resource://file/session/';
+    const isAbsoluteWorkspacePath = (path) =>
+      path.startsWith('/') || /^[A-Za-z]:[/\\]/.test(path) || path.startsWith('\\\\');
+    const encodeAddressPath = (path) =>
+      path
+        .replace(/\\/g, '/')
+        .replace(/^(?:\.\/)+/, '')
+        .split('/')
+        .map((segment) => encodeURIComponent(segment))
+        .join('/');
+    const sessionFileAddress = (sessionId, path) =>
+      `${FILE_ADDRESS_PREFIX}${encodeURIComponent(sessionId)}/${encodeAddressPath(path)}`;
+    /**
+     * The address for a path as the Git panel holds it, matching the harness util.
+     * @param {string} sessionId - the Session the path is read in.
+     * @param {string | undefined} cwd - that Session's workspace root.
+     * @param {string} path - absolute or workspace-relative path.
+     * @returns {string} the `dsh-resource://file/...` address.
+     */
+    function fileAddressFor(sessionId, cwd, path) {
+      const normalized = path.replace(/\\/g, '/');
+      if (!isAbsoluteWorkspacePath(normalized)) return sessionFileAddress(sessionId, normalized);
+      const root = cwd === undefined ? '' : cwd.replace(/\\/g, '/').replace(/\/+$/, '');
+      if (root !== '' && normalized === root) return sessionFileAddress(sessionId, '');
+      if (root !== '' && normalized.startsWith(`${root}/`)) {
+        return sessionFileAddress(sessionId, normalized.slice(root.length + 1));
+      }
+      return sessionFileAddress(sessionId, normalized);
+    }
+    /**
+     * The working-tree line of the first change in a diff.
+     * @param {{ rows?: Array<{ l: number | null, r: number | null, k: string }> }} diff - the diff.
+     * @returns {number} a 1-based line.
+     */
+    function openDiffLine(diff) {
+      const rows = diff?.rows ?? [];
+      const index = rows.findIndex((row) => row.k !== 'ctx');
+      if (index < 0) return 1;
+      for (let i = index; i < rows.length; i += 1) {
+        if (rows[i].r !== null && rows[i].r !== undefined) return rows[i].r;
+      }
+      return 1;
+    }
+
     const EN = {
       'panel': 'Git',
       'mode.changes': 'Changes',
@@ -47,6 +91,7 @@ window.__ModuleLoader__.load({
       'action.revertBlock': 'Revert block to the staged version',
       'action.refresh': 'Refresh',
       'action.back': 'Back to changes',
+      'action.openEditor': 'Open in editor',
       'action.prevChange': 'Previous change',
       'action.nextChange': 'Next change',
       'action.close': 'Close',
@@ -282,6 +327,7 @@ window.__ModuleLoader__.load({
       'action.revertBlock': '将区块还原为已暂存版本',
       'action.refresh': '刷新',
       'action.back': '返回更改',
+      'action.openEditor': '在编辑器中打开',
       'action.prevChange': '上一个更改',
       'action.nextChange': '下一个更改',
       'action.close': '关闭',
@@ -838,6 +884,7 @@ window.__ModuleLoader__.load({
       chevronUp: 'M6 15l6-6 6 6',
       sparkles: 'M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9zM18.5 15l.9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9z',
       file: 'M14 3H7a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V7zM14 3v4h4',
+      code: 'M8 7l-5 5 5 5M16 7l5 5-5 5',
       warning: 'M12 3l9 16H3zM12 9v5M12 17v.5',
       check: 'M5 12l5 5L20 7',
       folder: 'M3 6a1 1 0 0 1 1-1h5l2 2h8a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z',
@@ -1550,6 +1597,7 @@ button[data-forge-header]{display:none}
       onRefresh,
       onBlock,
       onResolve,
+      onOpen,
       message,
       onMessage,
       onCommit,
@@ -1944,6 +1992,7 @@ button[data-forge-header]{display:none}
                 renamed: selection.renamed === true,
                 compact,
                 onBack,
+                onOpen,
               })
             : h(Empty, {
                 icon: h(Icon, { path: paths.file, size: 28 }),
@@ -1955,7 +2004,7 @@ button[data-forge-header]{display:none}
       );
     }
 
-    function DiffView({ t, diff, loading, layout, onLayout, onBlock, onResolve, busy, selectionKey, renamed, compact, onBack }) {
+    function DiffView({ t, diff, loading, layout, onLayout, onBlock, onResolve, busy, selectionKey, renamed, compact, onBack, onOpen }) {
       const bodyRef = useRef(null);
       const [changeNav, setChangeNav] = useState({ index: -1, canPrev: false, canNext: false });
       const blocks = useMemo(() => {
@@ -2134,6 +2183,13 @@ button[data-forge-header]{display:none}
           h(
             'div',
             { className: 'gitp-diff-actions' },
+            onOpen !== undefined && !diff.binary
+              ? h(IconButton, {
+                  label: t('action.openEditor'),
+                  icon: paths.code,
+                  onClick: () => onOpen(diff),
+                })
+              : null,
             diff.conflict
               ? null
               : h(
@@ -3797,7 +3853,7 @@ button[data-forge-header]{display:none}
       );
     }
 
-    function GitPanel({ call, t, useWorkspaces, useSessions, sessionId, useTabInfo }) {
+    function GitPanel({ call, t, useWorkspaces, useSessions, sessionId, useTabInfo, sidebarRight }) {
       const { tab } = useTabInfo();
       const reportVisible = visibilityOf(sessionId).set;
 
@@ -3871,6 +3927,16 @@ button[data-forge-header]{display:none}
       const [refreshToken, setRefreshToken] = useState(0);
       const [repos, setRepos] = useState([]);
       const [repoRoot, setRepoRoot] = useState(null);
+      const openInEditor = (current) => {
+        if (repoRoot === null || sidebarRight === undefined) return;
+        const line = openDiffLine(current);
+        const address = fileAddressFor(
+          sessionId,
+          session === undefined ? undefined : session.cwd,
+          `${repoRoot}/${current.path}`,
+        );
+        sidebarRight.openResource(address, { params: { line } });
+      };
       const [repoNonce, setRepoNonce] = useState(0);
       const [repoMenu, setRepoMenu] = useState(false);
       const [newBranchOpen, setNewBranchOpen] = useState(false);
@@ -4553,6 +4619,7 @@ button[data-forge-header]{display:none}
                         },
                         onBlock: blockAction,
                         onResolve: resolve,
+                        onOpen: openInEditor,
                         message,
                         onMessage: setMessage,
                         onCommit: doCommit,
@@ -5073,7 +5140,7 @@ button[data-forge-header]{display:none}
               name: 'sidebar.right.pane.tab',
               key: GIT_TAB_ID,
               locale: NS,
-              inject: () => ({ call, t }),
+              inject: () => ({ call, t, sidebarRight: ctx.sidebarRight }),
             },
             GitPanel,
           ),
