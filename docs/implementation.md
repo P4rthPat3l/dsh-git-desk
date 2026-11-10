@@ -15,11 +15,11 @@ The package name is `dsh-git-desk`. The source folder stays `dsh-git`. The bundl
 | `index.js` | Host entry, `/git-rpc` route registration |
 | `lib/exec.js` | `ctx.subprocess` runner, timeout, cancellation, error mapping |
 | `lib/parse.js` | Porcelain v2, numstat, zero-context hunks, full-file rows, log, stash |
-| `lib/git.js` | Status, versions, diff, block edits, commit, branch, sync, log, stash, conflicts |
+| `lib/git.js` | Status, versions, diff, block edits, commit, branch, sync, log, stash, conflicts, history actions |
 | `lib/rpc.js` | Endpoint dispatch and workspace resolution |
 | `lib/http.js` | Authenticated `/git-rpc` envelope over `ctx.connection.admit` |
 | `lib/ai.js` | One `ctx.llm` call over the staged patch; model comes from `agentDefaultModel` |
-| `client.js` | Right-sidebar tab body and title, Start-guide card, compact and wide layouts, split and unified diff, dialogs, locales, styles |
+| `client.js` | Right-sidebar tab body and title, Start-guide card, compact and wide layouts, split and unified diff, commit menu, dialogs, locales, styles |
 | `locale/en.json`, `locale/zh.json` | Plugin Manager title and description |
 | `icon.svg` | Plugin Manager icon |
 
@@ -77,6 +77,10 @@ Every write returns a fresh status snapshot. The client renders only from that s
 | `push`, `pull`, `fetch` | `workspaceId`, `repo` | Output, status |
 | `log` | `workspaceId`, `repo` | Up to 100 commits |
 | `commitDetail` | `workspaceId`, `repo`, `hash` | Commit and changed files |
+| `undoCommit` | `workspaceId`, `repo`, `hash` | Soft reset to the parent; the undone message and status |
+| `revertCommit` | `workspaceId`, `repo`, `hash` | Staged inverse change, message, and status; `conflicted` when the revert stops |
+| `cherryPickCommit` | `workspaceId`, `repo`, `hash` | New commit hash, output, status |
+| `resetToCommit` | `workspaceId`, `repo`, `hash`, `mode`, `confirm` | Output and status |
 | `branches` | `workspaceId`, `repo` | Local and remote branches |
 | `checkout` | `workspaceId`, `repo`, `branch`, `remote` | Output, status |
 | `stashList`, `stashPush`, `stashApply`, `stashDrop` | Selection | Stashes and status |
@@ -200,6 +204,8 @@ Not verified live: the running app was booted before the rename and this change,
 - Repository discovery scans two levels below the workspace, skips `node_modules` and hidden directories, and stops at 40. A repository deeper than that needs a narrower workspace.
 - Initializing at the workspace root while repositories exist is offered only behind a warning: the nested repositories become untracked folders.
 - A per-session `workingDirectory` override or a DSH worktree outside the workspace is not followed.
+- History actions refuse a merge, rebase, revert, or cherry-pick in progress. A revert is left pending until it is committed, so the History menu stays blocked until the user commits or aborts that revert outside the panel. The panel does not yet offer Continue or Abort for a cherry-pick or a revert.
+- Undo is limited to HEAD. Revert and cherry-pick refuse merge commits. There is no drop, squash, fixup, edit-message, tag, or per-file revert, and no interactive rebase.
 - Status is polled every 8 seconds while the panel is visible, plus after every write and on window focus. There is no Host filesystem watch.
 
 ## Verified, 0.16.0 preferences and key bindings
@@ -222,6 +228,28 @@ Not verified live: the settings section and the shortcut recorder were not seen 
 - `node --check client.js` passed and `npx impeccable detect --json client.js` returned `[]`.
 
 Not verified live: dragging the divider, the arrow-key step, the reset, and the auto-growing commit field. The panel was not rendered in this session. The field writes `height:auto`, measures `scrollHeight` plus its border, and applies `min(content, 45% of the panel height)` with `overflow-y` set to match; the empty field stays at its CSS `min-height`.
+
+## Verified, 0.18.0 history commit actions
+
+Host rules, against a temporary repository, through the real `lib/git.js` functions and a local Git runtime. The run reported `32 passed, 0 failed`. It covered:
+
+- Undo moves HEAD to the parent, keeps the message, leaves the change staged, and reports no pending operation.
+- Undo refuses a pending revert, a detached HEAD, the first commit, and a pushed HEAD, while accepting a local-only commit and restoring its change staged.
+- Revert stages the inverse change, generates `Revert "<subject>"` with the commit line, reports `reverting: true`, and refuses a dirty index, a merge commit, and a second history action while pending.
+- Committing the generated message finishes the revert and clears `reverting`.
+- Cherry-pick commits immediately, returns the new head, refuses an applied commit and a merge commit, aborts a conflicting pick, and leaves the branch, the working tree, and the sequencer state unchanged after the abort.
+- Reset soft leaves the change staged, hard discards it, an unknown mode and a missing confirmation are refused, and a detached HEAD is refused.
+- `commitDetail` still reads a merge commit with two parents.
+
+Client menu logic, extracted from `client.js` with stubbed translations: `25 passed, 0 failed`. It covered every availability reason: detached, not HEAD, no parent, pushed, merge, contained, staged, conflicted, operation in progress, and a missing snapshot.
+
+Component render, using `CommitActionsMenu` and `ResetDialog` extracted from `client.js` under React server rendering with the real EN strings: `12 passed, 0 failed`. The menu renders all five rows, the hash and subject, disabled rows with their reason, and the busy state. The reset dialog renders all three modes, the soft hint, the target hash, and an inline error, and hides the hard warning until Hard is selected.
+
+A module smoke test loaded `client.js` with a stubbed loader and React and applied the plugin. The five slot registrations appeared, and the module reported `client module loads and registers`.
+
+Static checks: `node --check lib/git.js`, `node --check lib/rpc.js`, and `node --check client.js` passed. The stylesheet balanced 318 braces over 39,574 characters. Both locale dictionaries hold 231 keys with no miss, and every literal `t('...')` key resolves. `npx impeccable detect --json client.js` returned `[]`.
+
+Not verified live: the menu, the confirms, the reset dialog, and the switch to Changes with a filled message. The running page still serves the bundle from before this change, and this session did not render the panel.
 
 ## Open the tab
 

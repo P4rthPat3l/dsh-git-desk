@@ -374,6 +374,19 @@ Merge commits get special treatment. For a clean merge, the pane shows "changes 
 - `Show All Affected Files` (`Alt+Shift+A`) opens `Paths Affected in Revision`.
 - `Enable Git Log Indexing` advertises "Fast log filtering and computing precise history," "Displaying all branches in file history," and "Searching across history in Search Everywhere." It is a toggle in the toolbar and in `Settings | Version Control | Confirmation | Log`, which tells you indexing is optional and costs something.
 
+### 5.7 Actions on a commit
+
+The Log commit menu listed in 9.3 is the editing surface. Four actions have documented rules that matter for any client that copies them. Read from the [Log tab](https://www.jetbrains.com/help/idea/log-tab.html) and [Undo changes](https://www.jetbrains.com/help/idea/undo-changes.html) pages on 2026-11-10, IntelliJ IDEA 2026.3:
+
+- `Undo Commit`. "IntelliJ IDEA allows you to undo the last commit in the current branch." It is available only for commits made by you, and cannot run on a protected branch, defined as one where force push is not allowed. The changes move to a changelist, with the commit message offered as the changelist name, so nothing is discarded.
+- `Revert Commit`. "A new commit will be created that reverts the changes in the selected commit." The Commit Changes dialog opens with an automatically generated message. Files can be deselected. Selecting several commits creates one revert commit for each.
+- `Cherry-pick`. The toolbar button is "disabled if the selected commit is already contained in the current branch." The IDE "will apply and commit changes to the target branch", so the pick is a commit and not a pending change. On conflict, "the selected changes will appear in the Changes area", and the VCS widget offers `Abort Cherry-Pick` and `Continue Cherry-Pick`.
+- `Reset Current Branch to Here`. Opens the Git Reset dialog with four modes: `Soft` stages the changes from the dropped commits, `Mixed` keeps them unstaged, `Hard` discards both staged and committed changes, and `Keep` discards the committed changes but keeps local changes intact.
+- `Drop Commits`. Discards a pushed commit "without leaving any traces" and therefore needs force push. Protected branches block it.
+- `Edit Commit Message`, `Fixup`, `Squash Into`, `Squash Commits`, and `Interactively Rebase from Here` all rewrite history and are limited to commits that have not been pushed, or require force push after review.
+
+The shape worth copying is the split between operations that add a commit (revert, cherry-pick) and operations that move the branch (undo, reset, drop). The first group is safe on shared branches. The second group needs an unpushed or unprotected branch, and the IDE says so before the action runs.
+
 ---
 
 ## 6. Stash and shelve

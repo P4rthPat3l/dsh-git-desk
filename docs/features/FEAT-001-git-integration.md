@@ -1,9 +1,9 @@
 ---
 id: FEAT-001
 title: Git integration
-status: implemented
-implementation_status: partial
-version: 0.17.0
+status: active
+implementation_status: shipped_unverified
+version: 0.18.0
 owners: [Parth Patel]
 created: 2026-11-09
 last_updated: 2026-11-10
@@ -22,7 +22,7 @@ One sentence: a Git workspace inside DeepSeek Harness for reviewing, staging, co
 | Actors | Developer using the harness |
 | Entry point | The Git button in the session header, or the **Git changes** card in the right sidebar Start guide |
 | Primary outcome | Review the agent's diff, then commit or stash exactly what was chosen |
-| State | Host and client implemented. Installed in the `web` profile. The client is a right-sidebar tab type and loads on the next window reload. Hunk stash, model-written messages, and a three-pane merge are deferred. |
+| State | Host and client implemented. Installed in the `web` profile. The client is a right-sidebar tab type and loads on the next window reload. History offers undo, revert, cherry-pick, and reset from a commit menu. Hunk stash, a three-pane merge, and history rewriting beyond those four actions are deferred. |
 | Mockup | [`../../mockup/index.html`](../../mockup/index.html) |
 | Implementation | [`../implementation.md`](../implementation.md) |
 | Brief | [`../design-brief.md`](../design-brief.md) |
@@ -37,7 +37,11 @@ A developer using the harness still keeps a JetBrains window open for Git. Revie
 
 In scope for 0.6.0: status, file and block staging, commit, amend, file-level stash, fetch, pull, push, branch listing and checkout, commit log with graph metadata, commit detail, conflict detection and whole-side resolution.
 
+0.18.0 adds four commit actions to History: undo the last commit, revert a commit, cherry-pick a commit, and reset the branch to a commit. Undo and revert return to Changes with the message filled, because that is where the panel already commits.
+
 Out of scope for 0.6.0: hunk-level stash, a three-pane merge editor, model-written commit messages and branch names, submodules, worktrees UI, interactive rebase, per-line staging, blame, signed-commit setup, pull requests, multiple repositories in one panel, LFS, binary diff rendering, file-history view.
+
+Out of scope for 0.18.0: drop commit, squash, fixup, edit commit message, tags, new branch at a commit, push all up to here, per-file revert, and revert of a merge commit. Each needs another dialog or a history rewrite the panel does not offer.
 
 ## 4. Terms
 
@@ -61,6 +65,7 @@ Developer. No other roles in v1.
 7. If the branch should have a name, they press the branch button, accept or edit the generated name, and create the branch and commit. Push stays the next explicit action.
 8. If the agent produced a conflict, the commit explains the conflict and the merge dialog resolves it.
 9. They switch to Log to inspect what landed, or Stash to park work before another session.
+10. They right-click a commit to undo the last one, revert it, cherry-pick it onto the branch, or reset the branch to it. Undo and revert open Changes with the message already filled.
 
 ## 7. System context
 
@@ -135,6 +140,8 @@ interface StatusSnapshot {
   branch: BranchInfo
   merging: boolean
   rebasing: boolean
+  reverting: boolean
+  cherryPicking: boolean
   conflicts: string[]
 }
 
@@ -208,6 +215,10 @@ The implemented wire contract is JSON over the authenticated `/git-rpc` channel.
 | `branches`, `checkout` | workspace, branch | Read and switch |
 | `stashList`, `stashPush`, `stashApply`, `stashDrop` | workspace, ref, paths | File-level stash |
 | `resolve` | workspace, path, side | Checkout one conflict side and stage it |
+| `undoCommit` | workspace, hash | `git reset --soft` to the parent |
+| `revertCommit` | workspace, hash | `git revert --no-commit` |
+| `cherryPickCommit` | workspace, hash | `git cherry-pick` |
+| `resetToCommit` | workspace, hash, mode, confirm | `git reset --soft`, `--mixed`, or `--hard` |
 
 Every command runs with `LC_ALL=C`, `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS=0` where safe, and a timeout. No shell string is built.
 
@@ -249,6 +260,11 @@ Every command runs with `LC_ALL=C`, `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS
 - BR-017. Creating a branch and committing requires a name, at least one staged file, and no unresolved conflict. It commits only staged blocks and does not push.
 - BR-018. Push and pull controls and their counts appear once, in the header toolbar.
 - BR-019. The right arrow in Unstaged drops local work. It requires a confirmation or an undo in production; the mockup applies it directly.
+- BR-020. History actions run only with no merge, rebase, revert, or cherry-pick in progress. The host refuses the action and the menu says why.
+- BR-021. Undo applies only to the HEAD commit of the current branch. The commit must have a parent, the branch must not be detached, and HEAD must not already be on the upstream branch. The reset is soft, so the change returns staged and the message is refilled in Changes.
+- BR-022. Revert requires a clean index, because a revert mixes with whatever is already staged. It stages the inverse change and the message `Revert "<subject>"` with the `This reverts commit <hash>.` line, then opens Changes. The commit stays in history. A merge commit is refused. A conflicting revert stays pending in the working tree and is finished by a normal commit after resolution.
+- BR-023. Cherry-pick refuses a merge commit, an unresolved conflict, and a commit whose patch is already applied to the branch. A successful pick commits immediately with the original message. A conflicting pick is aborted, so the branch and the working tree are unchanged.
+- BR-024. Reset requires an explicit mode and a confirmation. Hard reset discards tracked changes and warns that it cannot be undone. A detached HEAD is refused.
 
 ## 13. Acceptance criteria
 
@@ -299,6 +315,11 @@ Every command runs with `LC_ALL=C`, `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS
 | AC-043 | The divider disappears in the stacked compact layout, where the columns take the full width in turn. It reappears when the panel is wide again. |
 | AC-044 | Both views share one width, so switching between Changes and History does not move the split. When the panel narrows, the stored width is clamped so the divider the user sees is the one the next drag starts from. |
 | AC-045 | The commit message field shows the whole message, title and body, without the user opening it. Its height follows the content, refits when the column changes width, and scrolls only when the message exceeds 45% of the panel height. It has no manual resize handle. The branch dialog field behaves the same. |
+| AC-046 | Right-clicking a commit, or pressing the actions control in the detail header, opens a commit menu with Copy commit hash, Undo last commit, Revert commit, Cherry-pick commit, and Reset branch to here. An unavailable row is disabled and states the reason in the menu. Escape closes the menu and restores focus to the element that had it before the menu opened. |
+| AC-047 | Undo last commit is enabled only for the HEAD commit of the current branch when it has a parent, the branch is attached, and HEAD is not on the upstream. Running it soft-resets to the parent, switches to Changes with the undone files staged, and fills the message with the undone message. A pushed commit, a root commit, and a detached HEAD are refused with their reason. |
+| AC-048 | Revert commit stages the inverse change for a non-merge commit when the index is clean, fills `Revert "<subject>"` and the `This reverts commit <hash>.` line, and switches to Changes. Committing finishes the revert. A conflicted revert stays pending with the conflict group, and committing after resolution finishes it. A merge commit or a dirty index is refused. |
+| AC-049 | Cherry-pick applies a non-merge commit that is not already applied and commits it on the current branch with the original message, then refreshes the log. On conflict the pick is aborted, the branch and working tree are unchanged, and the error names the conflicted paths. A merge commit, an applied commit, and an unresolved conflict are refused. |
+| AC-050 | Reset branch to here opens a dialog with Soft, Mixed, and Hard, the target hash, and a confirmation. Soft leaves the changes staged, Mixed leaves them unstaged, and Hard discards them after a warning. The dialog reports a host error without closing. Detached HEAD is refused. |
 
 ## 14. Security and privacy
 
@@ -372,6 +393,7 @@ Install as a bundle and enable it in Plugins. Open the right sidebar, then the *
 - Building a Client bundle without the DSH source checkout may require a plain-JavaScript module. Confirm the deployment build path.
 - Diff rendering and staging correctness are the two places a bug corrupts user work. Treat them as the highest test priority.
 - Commit hooks and large repositories can hang the UI without timeouts and cancellation.
+- Undo and reset rewrite history. Undo is limited to an unpushed HEAD so a later pull cannot conflict. Reset hard is the only action that discards tracked work; it requires a mode and a confirmation, and the client does not treat it as reversible.
 
 ## 22. Open questions
 
@@ -406,6 +428,7 @@ These were open during design and are decided for 0.6.0.
 - 2026-11-09: restyled the panel to match the DSH primitives (Button, Input, Menu, Modal, Tag, SegmentedTabs). The plugin now uses the host type scale (13/20 body, 12/18 meta), radius scale, hairline outlines, `label-tertiary` for secondary text, the host code font, the host diff tokens, menu material, toast tokens, and the neutral primary button. The mode tabs are a segmented control, section actions appear on hover, and the header is borderless. Localized every hard-coded English string, replaced the macOS-only `(Cmd+Enter)` placeholder with a platform-aware hint, removed the fabricated UTF-8 and LF footer labels, and made section headers toggle with Enter and Space. Bumped to 0.14.0.
 - 2026-11-10: added a Git button to the session header next to the change request button, so the panel is reachable without opening the tab strip. The tab body reports its visibility so the button can show a pressed state. The stylesheet now installs once at module scope instead of inside the panel, because the header button needs it while the tab is closed. The stylesheet also hides the built-in change request button in that strip, which uses a similar branch glyph; its panel keeps its tab and opens from the tab strip. Bumped to 0.15.0.
 - 2026-11-10: the list and diff columns are separated by a draggable divider in Changes and History, with keyboard control, a shared stored width, and the same hairline and grab area as the harness split panes. The commit message field now grows to show a generated title and body instead of clipping them behind a fixed 72px box; it scrolls only past 45% of the panel height. Bumped to 0.17.0.
+- 2026-11-10: History commits carry a menu with undo, revert, cherry-pick, and reset, following the JetBrains Log actions and their guards. Undo is limited to an unpushed HEAD and keeps the change staged. Revert stages the inverse change with a generated message and opens Changes. Cherry-pick commits immediately and aborts on conflict. Reset offers soft, mixed, and hard behind a confirmation. Status now reports a pending revert or cherry-pick. Bumped to 0.18.0.
 
 ## 24. Implementation status
 
@@ -422,6 +445,7 @@ Status is partial: the core flows work, and the remaining gaps are named rather 
 | AI commit message and AI branch and commit | Done. Host call through `ctx.llm`; the model comes from Settings and can be overridden on the Git settings page. |
 | Horizontal mode tabs, two-panel body | Done. |
 | Draggable list and diff divider | Done in both views. Verified with a stub store run; not seen in the running page. |
+| History commit actions | Added in 0.18.0. Undo, revert, cherry-pick, and reset sit behind a commit menu with per-row reasons. Host rules are verified against a temporary repository; the menu and reset dialog render under React server rendering; not exercised in the running page. |
 | Stage one unstaged block, unstage one staged block | Done. Index blobs verified in the host run. |
 | Revert one local block with confirmation | Done. Confirmation is required by the host, not only the dialog. |
 | Commit and amend | Done. The host requires a staged file for amend too. |

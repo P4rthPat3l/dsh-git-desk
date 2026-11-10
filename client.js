@@ -146,6 +146,46 @@ window.__ModuleLoader__.load({
       'log.date': 'Date',
       'log.parent': 'Parent',
       'log.message': 'Message',
+      'history.actions': 'Commit actions',
+      'history.copy': 'Copy commit hash',
+      'history.undo': 'Undo last commit',
+      'history.undoHint': 'Moves HEAD back and keeps the change staged.',
+      'history.revert': 'Revert commit',
+      'history.revertHint': 'Stages the inverse change with a revert message.',
+      'history.cherryPick': 'Cherry-pick commit',
+      'history.cherryPickHint': 'Applies the commit here and commits it.',
+      'history.reset': 'Reset branch to here',
+      'history.resetHint': 'Moves this branch to the selected commit.',
+      'history.blockedOperation': 'Finish the current operation first.',
+      'history.blockedNotHead': 'Only the last commit can be undone.',
+      'history.blockedDetached': 'Check out a branch first.',
+      'history.blockedNoParent': 'The first commit cannot be undone.',
+      'history.blockedPushed': 'This commit is already on the upstream branch. Revert it instead.',
+      'history.blockedMerge': 'Merge commits are not supported here.',
+      'history.blockedStaged': 'Commit or unstage the staged files first.',
+      'history.blockedContained': 'Already in this branch.',
+      'history.blockedConflict': 'Resolve the conflicts first.',
+      'history.undoTitle': 'Undo the last commit?',
+      'history.undoBody': 'The commit leaves the branch and its changes stay staged, so you can edit and commit again.',
+      'history.undoAction': 'Undo commit',
+      'history.revertTitle': 'Revert this commit?',
+      'history.revertBody': 'A new set of changes that reverses this commit is staged with a generated message. The commit stays in history.',
+      'history.revertAction': 'Revert commit',
+      'history.resetTitle': 'Reset this branch?',
+      'history.resetBody': 'This branch moves to {hash}. Choose what happens to the changes after it.',
+      'history.resetModeSoft': 'Soft',
+      'history.resetModeSoftHint': 'Keep the changes staged for a new commit.',
+      'history.resetModeMixed': 'Mixed',
+      'history.resetModeMixedHint': 'Keep the changes in the working tree, unstaged.',
+      'history.resetModeHard': 'Hard',
+      'history.resetModeHardHint': 'Discard the commits and their changes.',
+      'history.resetHardWarning': 'Hard reset discards every local change after this commit. This cannot be undone.',
+      'history.resetAction': 'Reset branch',
+      'history.undone': 'Commit undone. Changes are staged.',
+      'history.reverted': 'Revert ready. Review it, then commit.',
+      'history.revertConflicts': 'Revert stopped with conflicts. Resolve them, then commit.',
+      'history.picked': 'Cherry-picked as {hash}',
+      'history.resetDone': 'Branch reset to {hash}',
       'status.loading': 'Reading repository',
       'status.detached': 'Detached HEAD',
       'error.title': 'Git action failed',
@@ -341,6 +381,46 @@ window.__ModuleLoader__.load({
       'log.date': '日期',
       'log.parent': '父提交',
       'log.message': '信息',
+      'history.actions': '提交操作',
+      'history.copy': '复制提交哈希',
+      'history.undo': '撤销最后一次提交',
+      'history.undoHint': 'HEAD 回退，更改保留在暂存区。',
+      'history.revert': '还原提交',
+      'history.revertHint': '生成反向更改并写入还原信息。',
+      'history.cherryPick': '拣选提交',
+      'history.cherryPickHint': '在此分支应用并提交该提交。',
+      'history.reset': '将分支重置到此处',
+      'history.resetHint': '把当前分支移动到所选提交。',
+      'history.blockedOperation': '请先完成当前操作。',
+      'history.blockedNotHead': '只能撤销最后一次提交。',
+      'history.blockedDetached': '请先切换到分支。',
+      'history.blockedNoParent': '第一个提交无法撤销。',
+      'history.blockedPushed': '该提交已在上游分支上，请改用还原。',
+      'history.blockedMerge': '此处不支持合并提交。',
+      'history.blockedStaged': '请先提交或取消暂存已暂存的文件。',
+      'history.blockedContained': '已在当前分支中。',
+      'history.blockedConflict': '请先解决冲突。',
+      'history.undoTitle': '撤销最后一次提交？',
+      'history.undoBody': '该提交会离开分支，更改保留在暂存区，可继续编辑并重新提交。',
+      'history.undoAction': '撤销提交',
+      'history.revertTitle': '还原这个提交？',
+      'history.revertBody': '会暂存反向更改并填入还原信息，原提交仍保留在历史中。',
+      'history.revertAction': '还原提交',
+      'history.resetTitle': '重置这个分支？',
+      'history.resetBody': '分支会移动到 {hash}。选择其后更改的处理方式。',
+      'history.resetModeSoft': '软重置',
+      'history.resetModeSoftHint': '更改保留在暂存区，可重新提交。',
+      'history.resetModeMixed': '混合重置',
+      'history.resetModeMixedHint': '更改保留在工作区，不暂存。',
+      'history.resetModeHard': '硬重置',
+      'history.resetModeHardHint': '丢弃这些提交及其更改。',
+      'history.resetHardWarning': '硬重置会丢弃该提交之后的全部本地更改，且无法撤销。',
+      'history.resetAction': '重置分支',
+      'history.undone': '已撤销提交，更改已暂存。',
+      'history.reverted': '还原已就绪，请检查后提交。',
+      'history.revertConflicts': '还原遇到冲突，请解决后提交。',
+      'history.picked': '已拣选为 {hash}',
+      'history.resetDone': '分支已重置到 {hash}',
       'status.loading': '正在读取仓库',
       'status.detached': '游离 HEAD',
       'error.title': 'Git 操作失败',
@@ -766,6 +846,12 @@ window.__ModuleLoader__.load({
       search: 'M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.35-4.35',
       copy: 'M8 4v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7.242a2 2 0 0 0-.602-1.43L16.08 2.5a2 2 0 0 0-1.43-.5H10a2 2 0 0 0-2 2zM4 8H3a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-1',
       checkAlt: 'M20 6L9 17l-5-5',
+      more: 'M6 12h.01M12 12h.01M18 12h.01',
+      undo: 'M9 14L4 9l5-5M4 9h10a6 6 0 0 1 0 12h-2',
+      revert: 'M10 7L5 12l5 5M5 12h9a5 5 0 0 1 5 5',
+      cherry:
+        'M12 17.5m-3.5 0a3.5 3.5 0 1 0 7 0a3.5 3.5 0 1 0 -7 0M7 6.5m-2.5 0a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0 -5 0M12 14c0-3 2-5.5 6-7M12 14c-1-2.5-2.5-4-5-5.5',
+      reset: 'M3 12a9 9 0 1 0 3-6.7M3 4v5h5M12 8v4l2.5 2',
     };
 
     const ROW = 20;
@@ -986,6 +1072,23 @@ button[data-forge-header]{display:none}
 .gitp-detail-file{display:flex;align-items:center;gap:8px;height:30px;padding:0 8px;border:0;border-radius:var(--dsw-radius-sm,8px);background:transparent;cursor:pointer;text-align:left;font-size:13px;color:var(--dsw-alias-label-primary);transition:background-color 100ms ease}
 .gitp-detail-file:hover{background:var(--dsw-alias-interactive-bg-hover)}
 .gitp-detail-file.is-selected{background:var(--dsw-alias-interactive-bg-active)}
+.gitp-detail-title{display:flex;align-items:flex-start;gap:4px;margin-bottom:4px}
+.gitp-detail-title .gitp-detail-subject{margin-bottom:0;flex:1;min-width:0}
+.gitp-action-row{display:flex;align-items:flex-start;gap:8px;width:100%;min-height:34px;padding:5px 8px;border:0;border-radius:var(--dsw-radius-sm,8px);background:transparent;text-align:left;cursor:pointer}
+.gitp-action-row:hover:not(:disabled),.gitp-action-row:focus-visible{background:var(--dsw-alias-interactive-bg-hover);outline:none}
+.gitp-action-row:disabled{opacity:.55;cursor:default}
+.gitp-action-row svg{flex:none;margin-top:2px;color:var(--dsw-alias-menu-icon,var(--dsw-alias-label-secondary))}
+.gitp-action-text{display:flex;flex-direction:column;gap:1px;min-width:0;flex:1}
+.gitp-action-label{font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary)}
+.gitp-action-reason{font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary);white-space:normal;text-wrap:pretty}
+.gitp-popover-blurb{padding:0 8px 6px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gitp-reset-mode{display:flex;align-items:flex-start;gap:9px;padding:7px 8px;border-radius:var(--dsw-radius-sm,8px);cursor:pointer}
+.gitp-reset-mode:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.gitp-reset-mode input{margin:3px 0 0;accent-color:var(--dsw-alias-state-business-primary)}
+.gitp-reset-mode-text{display:flex;flex-direction:column;gap:1px;min-width:0}
+.gitp-reset-mode-title{font-size:13px;line-height:20px;font-weight:500}
+.gitp-reset-mode-hint{font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary);text-wrap:pretty}
+.gitp-modal-warn{margin-top:8px;padding:8px 10px;border-radius:var(--dsw-radius-sm,8px);background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 12%,transparent);color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:18px;text-wrap:pretty}
 .gitp-stash{display:flex;flex:1;min-width:0;min-height:0;flex-direction:column;background:var(--dsw-alias-bg-base)}
 .gitp-stash-head{display:flex;align-items:center;justify-content:space-between;gap:8px;height:44px;padding:0 8px 0 16px;border-bottom:1px solid var(--dsw-alias-border-l1);flex:none}
 .gitp-stash-title{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:500;color:var(--dsw-alias-label-secondary)}
@@ -2749,7 +2852,206 @@ button[data-forge-header]{display:none}
       );
     }
 
-    function LogView({ call, workspaceId, repo, t, refreshToken, compact, layout, onLayout }) {
+    function historyMenu(commit, snapshot, ancestors, t) {
+      const branch = snapshot?.branch ?? null;
+      const operation =
+        snapshot?.merging === true ||
+        snapshot?.rebasing === true ||
+        snapshot?.reverting === true ||
+        snapshot?.cherryPicking === true;
+      const conflicted = (snapshot?.conflicts?.length ?? 0) > 0;
+      const staged = (snapshot?.entries ?? []).some((entry) => entry.staged);
+      const detached = branch === null || branch.detached === true;
+      const isHead = branch?.oid !== null && branch?.oid !== undefined && branch.oid === commit.hash;
+      const pushed = typeof branch?.upstream === 'string' && branch.upstream !== '' && branch.ahead === 0;
+      const merge = (commit.parents?.length ?? 0) > 1;
+      const rows = [];
+
+      rows.push({ id: 'copy', label: t('history.copy'), icon: paths.copy, hint: null, reason: null });
+
+      let reason = null;
+      if (operation) reason = t('history.blockedOperation');
+      else if (detached) reason = t('history.blockedDetached');
+      else if (!isHead) reason = t('history.blockedNotHead');
+      else if ((commit.parents?.length ?? 0) === 0) reason = t('history.blockedNoParent');
+      else if (pushed) reason = t('history.blockedPushed');
+      rows.push({
+        id: 'undo',
+        label: t('history.undo'),
+        icon: paths.undo,
+        hint: t('history.undoHint'),
+        reason,
+      });
+
+      reason = null;
+      if (operation) reason = t('history.blockedOperation');
+      else if (merge) reason = t('history.blockedMerge');
+      else if (conflicted) reason = t('history.blockedConflict');
+      else if (staged) reason = t('history.blockedStaged');
+      rows.push({
+        id: 'revert',
+        label: t('history.revert'),
+        icon: paths.revert,
+        hint: t('history.revertHint'),
+        reason,
+      });
+
+      reason = null;
+      if (operation) reason = t('history.blockedOperation');
+      else if (merge) reason = t('history.blockedMerge');
+      else if (conflicted) reason = t('history.blockedConflict');
+      else if (ancestors.has(commit.hash)) reason = t('history.blockedContained');
+      rows.push({
+        id: 'cherry',
+        label: t('history.cherryPick'),
+        icon: paths.cherry,
+        hint: t('history.cherryPickHint'),
+        reason,
+      });
+
+      reason = null;
+      if (operation) reason = t('history.blockedOperation');
+      else if (detached) reason = t('history.blockedDetached');
+      rows.push({
+        id: 'reset',
+        label: t('history.reset'),
+        icon: paths.reset,
+        hint: t('history.resetHint'),
+        reason,
+      });
+
+      return rows;
+    }
+
+    function CommitActionsMenu({ t, commit, rows, busy, onPick, onClose }) {
+      const menuRef = useRef(null);
+      const closeRef = useRef(onClose);
+      const previous = useRef(null);
+      closeRef.current = onClose;
+      useEffect(() => {
+        previous.current = document.activeElement;
+        menuRef.current?.querySelector('button:not(:disabled)')?.focus();
+        const onKey = (event) => {
+          if (event.key !== 'Escape') return;
+          event.preventDefault();
+          event.stopPropagation();
+          closeRef.current();
+        };
+        document.addEventListener('keydown', onKey, true);
+        return () => {
+          document.removeEventListener('keydown', onKey, true);
+          if (previous.current && typeof previous.current.focus === 'function') previous.current.focus();
+        };
+      }, []);
+      return h(
+        'div',
+        {
+          className: 'gitp-popover-layer',
+          onMouseDown: (event) => {
+            if (event.target === event.currentTarget) closeRef.current();
+          },
+        },
+        h(
+          'div',
+          {
+            className: 'gitp-popover is-wide',
+            ref: menuRef,
+            role: 'menu',
+            'aria-label': t('history.actions'),
+          },
+          h('div', { className: 'gitp-popover-title' }, t('history.actions')),
+          h(
+            'div',
+            { className: 'gitp-popover-blurb', title: commit.subject },
+            `${shortHash(commit.hash)} · ${commit.subject}`,
+          ),
+          h('div', { className: 'gitp-popover-sep' }),
+          rows.map((row) =>
+            h(
+              'button',
+              {
+                type: 'button',
+                key: row.id,
+                className: 'gitp-action-row',
+                role: 'menuitem',
+                disabled: busy || row.reason !== null,
+                title: row.reason ?? row.hint ?? undefined,
+                onClick: () => onPick(row.id),
+              },
+              h(Icon, { path: row.icon, size: 13 }),
+              h(
+                'span',
+                { className: 'gitp-action-text' },
+                h('span', { className: 'gitp-action-label' }, row.label),
+                row.reason !== null || row.hint !== null
+                  ? h('span', { className: 'gitp-action-reason' }, row.reason ?? row.hint)
+                  : null,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    function ResetDialog({ t, commit, busy, error, onReset, onClose }) {
+      const [mode, setMode] = useState('soft');
+      const modes = [
+        ['soft', 'history.resetModeSoft', 'history.resetModeSoftHint'],
+        ['mixed', 'history.resetModeMixed', 'history.resetModeMixedHint'],
+        ['hard', 'history.resetModeHard', 'history.resetModeHardHint'],
+      ];
+      return h(
+        Modal,
+        { title: t('history.resetTitle'), onClose, danger: mode === 'hard' },
+        h('div', { className: 'gitp-modal-sub' }, t('history.resetBody', { hash: shortHash(commit.hash) })),
+        h(
+          'div',
+          { role: 'radiogroup', 'aria-label': t('history.resetTitle') },
+          modes.map(([value, title, hint]) =>
+            h(
+              'label',
+              { key: value, className: 'gitp-reset-mode' },
+              h('input', {
+                type: 'radio',
+                name: 'gitp-reset-mode',
+                value,
+                checked: mode === value,
+                disabled: busy,
+                onChange: () => setMode(value),
+              }),
+              h(
+                'span',
+                { className: 'gitp-reset-mode-text' },
+                h('span', { className: 'gitp-reset-mode-title' }, t(title)),
+                h('span', { className: 'gitp-reset-mode-hint' }, t(hint)),
+              ),
+            ),
+          ),
+        ),
+        mode === 'hard'
+          ? h('div', { className: 'gitp-modal-warn', role: 'alert' }, t('history.resetHardWarning'))
+          : null,
+        error !== null ? h('div', { className: 'gitp-modal-error' }, error) : null,
+        h(
+          'div',
+          { className: 'gitp-modal-actions' },
+          h('button', { type: 'button', className: 'gitp-btn', onClick: onClose, disabled: busy }, t('action.cancel')),
+          h(
+            'button',
+            {
+              type: 'button',
+              className: cx('gitp-btn', mode === 'hard' ? 'is-danger' : 'is-primary'),
+              onClick: () => onReset(mode),
+              disabled: busy,
+            },
+            busy ? h(Spinner) : null,
+            t('history.resetAction'),
+          ),
+        ),
+      );
+    }
+
+    function LogView({ call, workspaceId, repo, t, refreshToken, compact, layout, onLayout, snapshot, onApplied }) {
       const [commits, setCommits] = useState(null);
       const [selected, setSelected] = useState(null);
       const [detail, setDetail] = useState(null);
@@ -2761,6 +3063,12 @@ button[data-forge-header]{display:none}
       const [error, setError] = useState(null);
       const [copiedHash, setCopiedHash] = useState(false);
       const [listWidth, setListWidth] = useSplitWidth();
+      const [menuCommit, setMenuCommit] = useState(null);
+      const [confirm, setConfirm] = useState(null);
+      const [resetCommit, setResetCommit] = useState(null);
+      const [resetError, setResetError] = useState(null);
+      const [actionBusy, setActionBusy] = useState(null);
+      const [notice, setNotice] = useState(null);
       const logRef = useRef(null);
       const logListRef = useRef(null);
       const repoRef = useRef(repo);
@@ -2772,6 +3080,19 @@ button[data-forge-header]{display:none}
           setTimeout(() => setCopiedHash(false), 2000);
         }
       };
+
+      useEffect(() => {
+        if (notice === null) return;
+        const id = setTimeout(() => setNotice(null), 4000);
+        return () => clearTimeout(id);
+      }, [notice]);
+
+      useEffect(() => {
+        setMenuCommit(null);
+        setConfirm(null);
+        setResetCommit(null);
+        setResetError(null);
+      }, [repo]);
 
       useEffect(() => {
         if (repoRef.current === repo) return;
@@ -2872,6 +3193,115 @@ button[data-forge-header]{display:none}
         };
       }, [workspaceId, repo, file, detail]);
 
+      const ancestors = useMemo(() => {
+        const parents = new Map();
+        for (const row of commits ?? []) parents.set(row.hash, row.parents ?? []);
+        const seen = new Set();
+        const queue = [];
+        const head = snapshot?.branch?.oid;
+        if (typeof head === 'string' && head !== '') queue.push(head);
+        while (queue.length > 0) {
+          const hash = queue.pop();
+          if (seen.has(hash)) continue;
+          seen.add(hash);
+          for (const parent of parents.get(hash) ?? []) queue.push(parent);
+        }
+        return seen;
+      }, [commits, snapshot?.branch?.oid]);
+
+      const menuRows = menuCommit === null ? [] : historyMenu(menuCommit, snapshot, ancestors, t);
+
+      async function performUndo(commit) {
+        setActionBusy('undo');
+        try {
+          const result = await call('undoCommit', { workspaceId, repo, hash: commit.hash });
+          setConfirm(null);
+          onApplied({
+            status: result.status,
+            message: result.message,
+            goToChanges: true,
+            toast: t('history.undone'),
+          });
+        } catch (event) {
+          setConfirm(null);
+          setNotice({ text: errorMessage(event), error: true });
+          onApplied({});
+        } finally {
+          setActionBusy(null);
+        }
+      }
+
+      async function performRevert(commit) {
+        setActionBusy('revert');
+        try {
+          const result = await call('revertCommit', { workspaceId, repo, hash: commit.hash });
+          setConfirm(null);
+          onApplied({
+            status: result.status,
+            message: result.message,
+            goToChanges: true,
+            toast: t(result.conflicted ? 'history.revertConflicts' : 'history.reverted'),
+          });
+        } catch (event) {
+          setConfirm(null);
+          setNotice({ text: errorMessage(event), error: true });
+          onApplied({});
+        } finally {
+          setActionBusy(null);
+        }
+      }
+
+      async function performCherry(commit) {
+        setActionBusy('cherry');
+        try {
+          const result = await call('cherryPickCommit', { workspaceId, repo, hash: commit.hash });
+          setNotice({ text: t('history.picked', { hash: shortHash(result.hash) }), error: false });
+          onApplied({ status: result.status });
+        } catch (event) {
+          setNotice({ text: errorMessage(event), error: true });
+          onApplied({});
+        } finally {
+          setActionBusy(null);
+        }
+      }
+
+      async function performReset(commit, mode) {
+        setActionBusy('reset');
+        setResetError(null);
+        try {
+          const result = await call('resetToCommit', {
+            workspaceId,
+            repo,
+            hash: commit.hash,
+            mode,
+            confirm: true,
+          });
+          setResetCommit(null);
+          setNotice({ text: t('history.resetDone', { hash: shortHash(commit.hash) }), error: false });
+          onApplied({ status: result.status });
+        } catch (event) {
+          setResetError(errorMessage(event));
+        } finally {
+          setActionBusy(null);
+        }
+      }
+
+      function pickAction(id) {
+        const commit = menuCommit;
+        if (commit === null) return;
+        if (id === 'copy') {
+          copyHash(commit.hash);
+          setMenuCommit(null);
+          setNotice({ text: t('action.copied'), error: false });
+          return;
+        }
+        setMenuCommit(null);
+        if (id === 'undo') setConfirm({ type: 'undo', commit });
+        else if (id === 'revert') setConfirm({ type: 'revert', commit });
+        else if (id === 'cherry') performCherry(commit);
+        else if (id === 'reset') setResetCommit(commit);
+      }
+
       if (loading && commits === null) {
         return h(Empty, { icon: h(Spinner), title: t('log.loading') });
       }
@@ -2916,6 +3346,12 @@ button[data-forge-header]{display:none}
                       key: commit.hash,
                       className: cx('gitp-commitrow', selected === commit.hash && 'is-selected'),
                       onClick: () => setSelected(commit.hash),
+                      onContextMenu: (event) => {
+                        event.preventDefault();
+                        setSelected(commit.hash);
+                        setMenuCommit(commit);
+                      },
+                      'aria-haspopup': 'menu',
                     },
                     h(
                       'span',
@@ -2973,7 +3409,22 @@ button[data-forge-header]{display:none}
                         h(
                           'div',
                           { className: 'gitp-detail-head' },
-                          h('div', { className: 'gitp-detail-subject' }, detail.subject),
+                          h(
+                            'div',
+                            { className: 'gitp-detail-title' },
+                            h('div', { className: 'gitp-detail-subject' }, detail.subject),
+                            h(IconButton, {
+                              label: t('history.actions'),
+                              icon: paths.more,
+                              disabled: actionBusy !== null,
+                              onClick: () =>
+                                setMenuCommit({
+                                  hash: detail.hash,
+                                  parents: detail.parents ?? [],
+                                  subject: detail.subject,
+                                }),
+                            }),
+                          ),
                           h(
                             'div',
                             { className: 'gitp-detail-meta' },
@@ -3067,6 +3518,56 @@ button[data-forge-header]{display:none}
                     title: t('empty.selectFile'),
                     hint: t('empty.selectFileHint'),
                   }),
+            )
+          : null,
+        menuCommit
+          ? h(CommitActionsMenu, {
+              t,
+              commit: menuCommit,
+              rows: menuRows,
+              busy: actionBusy !== null,
+              onPick: pickAction,
+              onClose: () => setMenuCommit(null),
+            })
+          : null,
+        confirm
+          ? h(ConfirmDialog, {
+              title: t(confirm.type === 'undo' ? 'history.undoTitle' : 'history.revertTitle'),
+              body: t(confirm.type === 'undo' ? 'history.undoBody' : 'history.revertBody'),
+              confirmLabel: t(confirm.type === 'undo' ? 'history.undoAction' : 'history.revertAction'),
+              cancelLabel: t('action.cancel'),
+              busy: actionBusy !== null,
+              onConfirm: () =>
+                confirm.type === 'undo' ? performUndo(confirm.commit) : performRevert(confirm.commit),
+              onClose: () => {
+                if (actionBusy === null) setConfirm(null);
+              },
+            })
+          : null,
+        resetCommit
+          ? h(ResetDialog, {
+              t,
+              commit: resetCommit,
+              busy: actionBusy === 'reset',
+              error: resetError,
+              onReset: (mode) => performReset(resetCommit, mode),
+              onClose: () => {
+                if (actionBusy === null) {
+                  setResetCommit(null);
+                  setResetError(null);
+                }
+              },
+            })
+          : null,
+        notice
+          ? h(
+              'div',
+              {
+                className: cx('gitp-toast', notice.error && 'is-error'),
+                role: 'status',
+                'aria-live': 'polite',
+              },
+              notice.text,
             )
           : null,
       );
@@ -3439,6 +3940,25 @@ button[data-forge-header]{display:none}
           }
         },
         [workspace?.workspaceId, repoRoot, call],
+      );
+
+      const onLogApplied = useCallback(
+        (update) => {
+          if (update?.status) applyStatus(update.status);
+          if (update !== null && update !== undefined && 'message' in update) {
+            setMessage(update.message);
+            setAmend(false);
+          }
+          if (update?.goToChanges) {
+            setSelection(null);
+            setDiff(null);
+            setMode('changes');
+          }
+          if (update?.toast) setToast(update.toast);
+          setRefreshToken((value) => value + 1);
+          loadStatus(undefined, false);
+        },
+        [applyStatus, loadStatus],
       );
 
       const prevWsId = useRef(null);
@@ -3998,6 +4518,8 @@ button[data-forge-header]{display:none}
                       compact,
                       layout: effectiveLayout,
                       onLayout: changeLayout,
+                      snapshot,
+                      onApplied: onLogApplied,
                     })
                   : mode === 'stash'
                     ? h(StashView, {
