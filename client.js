@@ -181,6 +181,7 @@ window.__ModuleLoader__.load({
       'diff.staged': 'Staged',
       'stash.selectAll': 'Select all',
       'stash.deselectAll': 'Deselect all',
+      'header.label': 'Git panel',
     };
 
     const ZH = {
@@ -356,6 +357,7 @@ window.__ModuleLoader__.load({
       'diff.staged': '已暂存',
       'stash.selectAll': '全选',
       'stash.deselectAll': '全不选',
+      'header.label': 'Git 面板',
     };
 
     const STORE_LAYOUT = 'dsh-git.layout';
@@ -379,6 +381,36 @@ window.__ModuleLoader__.load({
     }
 
     const MOD_KEY = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? '⌘' : 'Ctrl';
+
+    // Whether the Git tab is the one on screen. The tab body is the only place
+    // that knows, so it reports here and the header button reads it.
+    const visibilityBySession = new Map();
+
+    function visibilityOf(sessionId) {
+      let source = visibilityBySession.get(sessionId);
+      if (source === undefined) {
+        const listeners = new Set();
+        let visible = false;
+        source = {
+          hook: {
+            getSnapshot: () => visible,
+            subscribe(listener) {
+              listeners.add(listener);
+              return () => {
+                listeners.delete(listener);
+              };
+            },
+          },
+          set(next) {
+            if (next === visible) return;
+            visible = next;
+            for (const listener of [...listeners]) listener();
+          },
+        };
+        visibilityBySession.set(sessionId, source);
+      }
+      return source;
+    }
 
     function cx(...names) {
       return names.filter(Boolean).join(' ');
@@ -577,10 +609,6 @@ window.__ModuleLoader__.load({
       return h(GitMark, { size });
     }
 
-    function Styles() {
-      return h('style', { dangerouslySetInnerHTML: { __html: CSS } });
-    }
-
     const CSS = `
 .gitp-root{--gitp-mono:var(--dsh-font-family-code,var(--dsh-font-family-code-default,ui-monospace,SFMono-Regular,Menlo,Consolas,monospace));--gitp-ease:cubic-bezier(.2,.7,.3,1);--gitp-hair:var(--dsh-hairline-width,.5px);--gitp-ring:var(--dsw-alias-state-business-primary);position:relative;display:flex;flex-direction:column;height:100%;min-height:0;width:100%;overflow:hidden;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font-family:var(--dsw-font-family,system-ui,sans-serif);font-size:13px;line-height:20px;-webkit-font-smoothing:antialiased}
 .gitp-root *{box-sizing:border-box}
@@ -612,6 +640,11 @@ window.__ModuleLoader__.load({
 .gitp-toolbtn:active:not(:disabled),.gitp-iconbtn:active:not(:disabled){background:var(--dsw-alias-interactive-bg-active)}
 .gitp-toolbtn:disabled,.gitp-iconbtn:disabled{opacity:.4;cursor:default}
 .gitp-iconbtn.is-active{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-active)}
+.gitp-header-btn:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:1px}
+/* The built-in change request button sits in the same strip with a similar
+   branch glyph, so this plugin hides it and keeps that panel in the tab strip.
+   The attribute is the host button's own marker; drop this rule to get it back. */
+button[data-forge-header]{display:none}
 .gitp-toolbtn.has-count{color:var(--dsw-alias-label-primary)}
 .gitp-toolbtn-num{font-size:12px;font-weight:600}
 .gitp-body{display:flex;flex-direction:column;flex:1;min-height:0}
@@ -853,6 +886,20 @@ window.__ModuleLoader__.load({
 .gitp-root.is-compact .gitp-diff-head{gap:6px;padding:0 4px}
 .gitp-root.is-compact .gitp-error{margin:0 8px 8px}
 `;
+
+    // The stylesheet is needed outside the panel too, for the session header
+    // button, so it installs once when the module loads.
+    const CSS_TAG_ID = 'dsh-git-desk/styles';
+    if (
+      typeof document !== 'undefined' &&
+      document.querySelector(`style[data-plugin-css=${JSON.stringify(CSS_TAG_ID)}]`) === null
+    ) {
+      const tag = document.createElement('style');
+      tag.dataset.plugin = 'dsh-git-desk';
+      tag.dataset.pluginCss = CSS_TAG_ID;
+      tag.textContent = CSS;
+      document.head.appendChild(tag);
+    }
 
     function Empty({ icon, title, hint, action }) {
       return h(
@@ -3011,7 +3058,21 @@ window.__ModuleLoader__.load({
       );
     }
 
-    function GitPanel({ call, t, useWorkspaces, useSessions, sessionId }) {
+    function GitPanel({ call, t, useWorkspaces, useSessions, sessionId, useTabInfo }) {
+      const { tab } = useTabInfo();
+      const reportVisible = visibilityOf(sessionId).set;
+
+      useEffect(() => {
+        reportVisible(tab.visible === true);
+      }, [reportVisible, tab.visible]);
+
+      useEffect(
+        () => () => {
+          reportVisible(false);
+        },
+        [reportVisible],
+      );
+
       const workspaces = useWorkspaces((state) => state.items);
       const session = useSessions((state) => state.byId[sessionId]);
       const workspace =
@@ -3578,7 +3639,7 @@ window.__ModuleLoader__.load({
       }
 
       if (workspace === null) {
-        return h('div', { className: 'gitp-root' }, h(Styles), h(Empty, {
+        return h('div', { className: 'gitp-root' }, h(Empty, {
           icon: h(Icon, { path: paths.branch, size: 28 }),
           title: t('empty.noWorkspace'),
           hint: t('empty.noWorkspaceHint'),
@@ -3596,7 +3657,6 @@ window.__ModuleLoader__.load({
       return h(
         'div',
         { className: cx('gitp-root', compact && 'is-compact'), ref: rootRef },
-        h(Styles),
         h(Header, {
           t,
           workspaceTitle: workspace.title,
@@ -3805,8 +3865,33 @@ window.__ModuleLoader__.load({
       );
     }
 
+    function GitHeaderButton({ sessionId, sidebarRight, useVisible, t }) {
+      const visible = useVisible((current) => current === true);
+      const label = t('header.label');
+
+      return h(
+        'button',
+        {
+          type: 'button',
+          className: cx('gitp-iconbtn', 'gitp-header-btn', visible && 'is-active'),
+          'aria-label': label,
+          'aria-pressed': visible,
+          title: label,
+          onClick() {
+            if (!visible) {
+              sidebarRight.openTab('git');
+              return;
+            }
+            const record = sidebarRight.tabsIn(sessionId).find((tab) => tab.kind === 'git');
+            if (record !== undefined) sidebarRight.hide(record.id);
+          },
+        },
+        h(GitMark, { size: 16 }),
+      );
+    }
+
     return {
-      inject: ['connection', 'slots', 'locale', 'sidebarRightTabs'],
+      inject: ['connection', 'slots', 'locale', 'sidebarRightTabs', 'sidebarRight'],
       apply(ctx) {
         ctx.locale.register(NS, 'en', EN);
         ctx.locale.register(NS, 'zh', ZH);
@@ -3839,6 +3924,22 @@ window.__ModuleLoader__.load({
               ],
             }),
           'dsh-git: right sidebar tab type',
+        );
+        ctx.slots.inject('conversation.session.header.utilities', () =>
+          ctx.slots.register(
+            {
+              name: 'conversation.session.header.utilities',
+              id: 'git-panel',
+              order: -7,
+              locale: NS,
+              inject: (sessionId) => ({
+                sessionId,
+                sidebarRight: ctx.sidebarRight,
+                hooks: { visible: visibilityOf(sessionId).hook },
+              }),
+            },
+            GitHeaderButton,
+          ),
         );
         ctx.slots.inject('sidebar.right.pane.tab', () =>
           ctx.slots.register(

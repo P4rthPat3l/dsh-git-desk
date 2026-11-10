@@ -3,10 +3,10 @@ id: FEAT-001
 title: Git integration
 status: implemented
 implementation_status: partial
-version: 0.13.0
+version: 0.15.0
 owners: [Parth Patel]
 created: 2026-11-09
-last_updated: 2026-11-09
+last_updated: 2026-11-10
 last_verified_commit: none
 ---
 
@@ -20,7 +20,7 @@ One sentence: a Git workspace inside DeepSeek Harness for reviewing, staging, co
 | --- | --- |
 | Surface | Harness right sidebar tab, plus dialogs |
 | Actors | Developer using the harness |
-| Entry point | The **Git changes** card in the right sidebar Start guide |
+| Entry point | The Git button in the session header, or the **Git changes** card in the right sidebar Start guide |
 | Primary outcome | Review the agent's diff, then commit or stash exactly what was chosen |
 | State | Host and client implemented. Installed in the `web` profile. The client is a right-sidebar tab type and loads on the next window reload. Hunk stash, model-written messages, and a three-pane merge are deferred. |
 | Mockup | [`../../mockup/index.html`](../../mockup/index.html) |
@@ -54,7 +54,7 @@ Developer. No other roles in v1.
 
 1. The developer asks the agent to change code.
 2. A badge on the panel rail shows the number of changed files.
-3. The developer opens Git and sees Conflicts, Staged, and Unstaged groups.
+3. The developer opens Git from the header button and sees Conflicts, Staged, and Unstaged groups.
 4. They click a file and read a side-by-side diff of the entire file, with a center gutter, block arrows, and word-level highlights.
 5. They press `+` to stage a whole file. In the unstaged diff, the left arrow stages one block; in the staged diff, the right arrow unstages one. The unstaged diff also has a right arrow that applies the staged side to local.
 6. They write or generate a message and press Commit, or Commit and push.
@@ -223,7 +223,7 @@ Every command runs with `LC_ALL=C`, `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS
 | `dsh-git/lib/git.js` | Implemented | Repository discovery, status, diff, block writes, branch create and checkout, commit, sync, log, stash, conflicts |
 | `dsh-git/lib/rpc.js` | Implemented | Endpoint dispatch, repository validation, workspace resolution |
 | `dsh-git/lib/http.js` | Implemented | Authenticated JSON envelope |
-| `dsh-git/client.js` | Implemented | Right-tab body and title, repository picker, session auto-open, branch menu and new-branch dialog, Start-guide card, compact and wide layouts, split and unified diff, dialogs, locales, styles |
+| `dsh-git/client.js` | Implemented | Right-tab body and title, session header button, repository picker, session auto-open, branch menu and new-branch dialog, Start-guide card, compact and wide layouts, split and unified diff, dialogs, locales, styles |
 | `dsh-git/locale/en.json`, `dsh-git/locale/zh.json` | Implemented | Plugin Manager metadata |
 | `dsh-git/icon.svg` | Implemented | Plugin icon |
 | `dsh-git/docs/implementation.md` | Implemented | Architecture, endpoints, verification, limits |
@@ -281,7 +281,7 @@ Every command runs with `LC_ALL=C`, `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS
 | AC-025 | When repositories already exist, root initialization is offered only through a confirmation that warns the nested repositories become untracked folders. |
 | AC-026 | New branch creates a branch from `HEAD` with nothing staged, checks it out, and updates the branch chip. |
 | AC-027 | The branch menu searches local and remote branches. A remote branch checkout creates a local tracking branch, and the current branch is marked. |
-| AC-028 | The Git tab opens only on explicit user request (from the Start guide card or the tab strip), and does not automatically open when a session starts. |
+| AC-028 | The Git tab opens only on explicit user request (from the session header button, the Start guide card, or the tab strip), and does not automatically open when a session starts. |
 | AC-029 | A `repo` path that is relative, not a repository root, or outside the workspace is rejected by the host. The one exception is the repository that encloses the workspace, which is a valid repository for a workspace subdirectory. |
 | AC-030 | The plus in the Unstaged header stages every unstaged file that is not conflicted in one request, sending both paths of a rename, and the Unstaged section disappears when nothing remains. Its tooltip reads `Stage all`. |
 | AC-031 | The minus in the Staged header unstages every staged file in one request, and the files return to Unstaged with their local changes intact. Its tooltip reads `Unstage all`. |
@@ -292,6 +292,8 @@ Every command runs with `LC_ALL=C`, `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS
 | AC-036 | In History mode, selecting a commit shows its commit metadata and changed files list in Panel 1, and automatically displays the full-height diff for the selected file in Panel 2. Root/orphan commits (where `parents[0]` is undefined) diff cleanly against an empty tree without throwing. |
 | AC-037 | Every control and surface uses DSH native design tokens (`--dsw-*`): segmented tab capsule with `--dsw-alias-bg-module-platform`, elevated tab indicator with `--dsw-alias-bg-layer-3`, rounded control radii (`--dsw-radius-sm/md/lg`), and subtle hairline dividers (`--dsw-alias-border-l1/l2`). |
 | AC-038 | ResizeObserver callbacks are wrapped in `requestAnimationFrame` to eliminate unhandled resize loop errors. Workspace and repository change handlers preserve active state to eliminate reload/reconnection flickers. |
+| AC-039 | The session header shows a Git button next to the change request button. Pressing it opens the Git tab; pressing it while the tab is on screen collapses the right sidebar. It reports pressed state, names itself `Git panel` to assistive technology, and shows the same label as its tooltip. |
+| AC-040 | While this plugin is installed, the session header does not show the built-in change request button, so only the Git button carries a branch glyph. The change request panel keeps its tab and opens from the tab strip. |
 
 ## 14. Security and privacy
 
@@ -397,6 +399,7 @@ These were open during design and are decided for 0.6.0.
 - 2026-11-09: redeemed the UI with DSH native design system tokens (`--dsw-*`), native segmented tabs, and consistent two-panel layout across Changes and History. Fixed git log parser newline bug that broke commit selection, added automatic diff preview in History panel, added root-commit diff handling, wrapped ResizeObserver in requestAnimationFrame, and stabilized workspace/repo state transitions. Bumped to 0.13.0.
 - 2026-11-09: disabled automatic sidebar tab opening on session start so the Git panel opens only on explicit user action from the Start guide or tab strip. Bumped to 0.13.1.
 - 2026-11-09: restyled the panel to match the DSH primitives (Button, Input, Menu, Modal, Tag, SegmentedTabs). The plugin now uses the host type scale (13/20 body, 12/18 meta), radius scale, hairline outlines, `label-tertiary` for secondary text, the host code font, the host diff tokens, menu material, toast tokens, and the neutral primary button. The mode tabs are a segmented control, section actions appear on hover, and the header is borderless. Localized every hard-coded English string, replaced the macOS-only `(Cmd+Enter)` placeholder with a platform-aware hint, removed the fabricated UTF-8 and LF footer labels, and made section headers toggle with Enter and Space. Bumped to 0.14.0.
+- 2026-11-10: added a Git button to the session header next to the change request button, so the panel is reachable without opening the tab strip. The tab body reports its visibility so the button can show a pressed state. The stylesheet now installs once at module scope instead of inside the panel, because the header button needs it while the tab is closed. The stylesheet also hides the built-in change request button in that strip, which uses a similar branch glyph; its panel keeps its tab and opens from the tab strip. Bumped to 0.15.0.
 
 ## 24. Implementation status
 
@@ -434,7 +437,9 @@ Status is partial: the core flows work, and the remaining gaps are named rather 
 | Repository without a repository | Done. Initialize is offered when the list is empty. Root initialization with existing repositories requires a warning. |
 | New branch without a commit | Done. The branch menu creates from HEAD and checks out; the host validates the name with `git check-ref-format`. |
 | Remote branch checkout | Done. `--track` creates the local tracking branch. |
-| Session auto-open | Disabled. The Git tab opens only on explicit user request. |
+| Session auto-open | Disabled. The Git tab opens only on explicit user request, from the header button, the Start guide, or the tab strip. |
+| Session header button | Added in 0.15.0. Toggles the tab and shows its pressed state. Not checked in a live window. |
+| Built-in change request button | Hidden by a stylesheet rule that matches the host button's `data-forge-header` marker. The change request panel and its tab are untouched. The rule stops applying if the host renames that attribute. |
 | 5,000-line render under 100 ms | Not measured. |
 | Aborted browser request cancels the Host Git process | Not wired. Local reads finish on their own. |
 
