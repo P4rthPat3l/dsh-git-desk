@@ -1,6 +1,6 @@
 {
   "name": "dsh-git-desk",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "type": "module",
   "description": "Git desk for DeepSeek Harness: a right-sidebar Git workbench with full-file side-by-side diffs, block staging, commits, history, branches, stash, and sync.",
   "keywords": [

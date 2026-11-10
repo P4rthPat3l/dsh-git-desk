@@ -3,7 +3,7 @@ id: FEAT-001
 title: Git integration
 status: implemented
 implementation_status: partial
-version: 0.15.0
+version: 0.17.0
 owners: [Parth Patel]
 created: 2026-11-09
 last_updated: 2026-11-10
@@ -294,6 +294,11 @@ Every command runs with `LC_ALL=C`, `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS
 | AC-038 | ResizeObserver callbacks are wrapped in `requestAnimationFrame` to eliminate unhandled resize loop errors. Workspace and repository change handlers preserve active state to eliminate reload/reconnection flickers. |
 | AC-039 | The session header shows a Git button next to the change request button. Pressing it opens the Git tab; pressing it while the tab is on screen collapses the right sidebar. It reports pressed state, names itself `Git panel` to assistive technology, and shows the same label as its tooltip. |
 | AC-040 | While this plugin is installed, the session header does not show the built-in change request button, so only the Git button carries a branch glyph. The change request panel keeps its tab and opens from the tab strip. |
+| AC-041 | Changes and History both draw a draggable divider between the list column and the diff column. Dragging it moves the split live, the file list keeps at least 220px, the diff keeps at least 280px, and the chosen width is stored in this browser under `dsh-git.split`. |
+| AC-042 | The divider is a focusable separator: left and right arrows move it by 16px, Home resets it to 320px, and double-click resets it with the pointer. It names itself for assistive technology, reports its current and maximum width, and shows a focus ring. |
+| AC-043 | The divider disappears in the stacked compact layout, where the columns take the full width in turn. It reappears when the panel is wide again. |
+| AC-044 | Both views share one width, so switching between Changes and History does not move the split. When the panel narrows, the stored width is clamped so the divider the user sees is the one the next drag starts from. |
+| AC-045 | The commit message field shows the whole message, title and body, without the user opening it. Its height follows the content, refits when the column changes width, and scrolls only when the message exceeds 45% of the panel height. It has no manual resize handle. The branch dialog field behaves the same. |
 
 ## 14. Security and privacy
 
@@ -400,6 +405,7 @@ These were open during design and are decided for 0.6.0.
 - 2026-11-09: disabled automatic sidebar tab opening on session start so the Git panel opens only on explicit user action from the Start guide or tab strip. Bumped to 0.13.1.
 - 2026-11-09: restyled the panel to match the DSH primitives (Button, Input, Menu, Modal, Tag, SegmentedTabs). The plugin now uses the host type scale (13/20 body, 12/18 meta), radius scale, hairline outlines, `label-tertiary` for secondary text, the host code font, the host diff tokens, menu material, toast tokens, and the neutral primary button. The mode tabs are a segmented control, section actions appear on hover, and the header is borderless. Localized every hard-coded English string, replaced the macOS-only `(Cmd+Enter)` placeholder with a platform-aware hint, removed the fabricated UTF-8 and LF footer labels, and made section headers toggle with Enter and Space. Bumped to 0.14.0.
 - 2026-11-10: added a Git button to the session header next to the change request button, so the panel is reachable without opening the tab strip. The tab body reports its visibility so the button can show a pressed state. The stylesheet now installs once at module scope instead of inside the panel, because the header button needs it while the tab is closed. The stylesheet also hides the built-in change request button in that strip, which uses a similar branch glyph; its panel keeps its tab and opens from the tab strip. Bumped to 0.15.0.
+- 2026-11-10: the list and diff columns are separated by a draggable divider in Changes and History, with keyboard control, a shared stored width, and the same hairline and grab area as the harness split panes. The commit message field now grows to show a generated title and body instead of clipping them behind a fixed 72px box; it scrolls only past 45% of the panel height. Bumped to 0.17.0.
 
 ## 24. Implementation status
 
@@ -415,6 +421,7 @@ Status is partial: the core flows work, and the remaining gaps are named rather 
 | Previous and next change with a change count | Done. |
 | AI commit message and AI branch and commit | Done. Host call through `ctx.llm`; the model comes from Settings and can be overridden on the Git settings page. |
 | Horizontal mode tabs, two-panel body | Done. |
+| Draggable list and diff divider | Done in both views. Verified with a stub store run; not seen in the running page. |
 | Stage one unstaged block, unstage one staged block | Done. Index blobs verified in the host run. |
 | Revert one local block with confirmation | Done. Confirmation is required by the host, not only the dialog. |
 | Commit and amend | Done. The host requires a staged file for amend too. |

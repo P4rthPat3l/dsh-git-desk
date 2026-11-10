@@ -199,6 +199,8 @@ window.__ModuleLoader__.load({
       'command.openFirst': 'Open the Git panel first',
       'command.nothingToStage': 'No changed files to stage',
       'command.notReady': 'Stage a file and write a message first',
+      'split.files': 'Resize the file list',
+      'split.commits': 'Resize the commit list',
     };
 
     const ZH = {
@@ -392,6 +394,8 @@ window.__ModuleLoader__.load({
       'command.openFirst': '请先打开 Git 面板',
       'command.nothingToStage': '没有可暂存的更改',
       'command.notReady': '请先暂存文件并填写提交信息',
+      'split.files': '调整文件列表宽度',
+      'split.commits': '调整提交列表宽度',
     };
 
     const STORE_LAYOUT = 'dsh-git.layout';
@@ -488,6 +492,84 @@ window.__ModuleLoader__.load({
         },
       };
     })();
+
+    // Width of the list column shared by Changes and History. One value keeps
+    // the divider in the same place when the user switches views.
+    const STORE_SPLIT = 'dsh-git.split';
+    const SPLIT_DEFAULT = 320;
+    const SPLIT_MIN = 220;
+    const SPLIT_DIFF_MIN = 280;
+    const SPLIT_MAX = 10_000;
+    const SPLIT_STEP = 16;
+
+    function readSplit() {
+      const raw = Number.parseInt(readStore(STORE_SPLIT, ''), 10);
+      if (!Number.isFinite(raw)) return SPLIT_DEFAULT;
+      return Math.min(Math.max(raw, SPLIT_MIN), SPLIT_MAX);
+    }
+
+    const split = (() => {
+      let current = readSplit();
+      const listeners = new Set();
+      return {
+        get: () => current,
+        subscribe(listener) {
+          listeners.add(listener);
+          return () => {
+            listeners.delete(listener);
+          };
+        },
+        set(next) {
+          const value = Math.round(next);
+          if (!Number.isFinite(value) || value === current) return;
+          current = Math.min(Math.max(value, SPLIT_MIN), SPLIT_MAX);
+          writeStore(STORE_SPLIT, String(current));
+          for (const listener of [...listeners]) listener();
+        },
+      };
+    })();
+
+    function useSplitWidth() {
+      const [value, setValue] = useState(split.get);
+      useEffect(() => {
+        setValue(split.get());
+        return split.subscribe(() => setValue(split.get()));
+      }, []);
+      return [value, split.set];
+    }
+
+    // A multi-line field that shows its whole message: the height follows the
+    // content, and only a message past 45% of the panel scrolls. Refits when
+    // the column changes width, because that changes the line count.
+    function useAutoGrow(ref, value) {
+      const lastWidth = useRef(0);
+      useEffect(() => {
+        const node = ref.current;
+        if (node === null) return undefined;
+        const fit = () => {
+          node.style.height = 'auto';
+          const border = node.offsetHeight - node.clientHeight;
+          const root = node.closest('.gitp-root');
+          const available = root === null ? 600 : root.getBoundingClientRect().height;
+          const limit = Math.max(140, Math.round(available * 0.45));
+          const content = node.scrollHeight + border;
+          node.style.height = `${Math.min(content, limit)}px`;
+          node.style.overflowY = content > limit ? 'auto' : 'hidden';
+        };
+        fit();
+        if (typeof ResizeObserver === 'undefined') return undefined;
+        const parent = node.parentElement;
+        if (parent === null) return undefined;
+        const observer = new ResizeObserver((entries) => {
+          const width = Math.round(entries[0].contentRect.width);
+          if (width === lastWidth.current) return;
+          lastWidth.current = width;
+          fit();
+        });
+        observer.observe(parent);
+        return () => observer.disconnect();
+      }, [ref, value]);
+    }
 
     // The select carries the pair as JSON so no separator can collide with a
     // provider or model id.
@@ -757,7 +839,7 @@ button[data-forge-header]{display:none}
 .gitp-rail-count{min-width:16px;font-size:12px;font-weight:500;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums;text-align:center}
 .gitp-content{display:flex;flex:1;min-width:0;min-height:0;border-top:1px solid var(--dsw-alias-border-l1)}
 .gitp-changes{display:flex;flex:1;min-width:0;min-height:0}
-.gitp-listcol{display:flex;flex-direction:column;width:320px;flex:none;min-height:0;border-right:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base)}
+.gitp-listcol{display:flex;flex-direction:column;width:320px;max-width:calc(100% - 280px);flex:none;min-width:0;min-height:0;background:var(--dsw-alias-bg-base)}
 .gitp-filter-box{display:flex;align-items:center;gap:6px;flex:none;margin:8px 8px 4px;padding:0 8px;height:30px;border:var(--gitp-hair) solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-sm,8px);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-tertiary);transition:border-color 120ms ease}
 .gitp-filter-box:focus-within{border-color:var(--dsw-alias-state-business-primary)}
 .gitp-filter-box input{flex:1;min-width:0;border:0;background:transparent;color:var(--dsw-alias-label-primary);font-size:13px;outline:none;padding:0}
@@ -795,7 +877,7 @@ button[data-forge-header]{display:none}
 .gitp-rowaction:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-accent,var(--dsw-alias-interactive-bg-active));color:var(--dsw-alias-label-primary)}
 .gitp-rowaction:disabled{opacity:.4;cursor:default}
 .gitp-commitbox{position:relative;flex:none;padding:8px;display:flex;flex-direction:column;gap:6px;border-top:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base)}
-.gitp-commitbox textarea{display:block;width:100%;height:72px;resize:vertical;min-height:56px;max-height:200px;padding:8px 10px;border:var(--gitp-hair) solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-sm,8px);background:var(--dsw-specific-input-major,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px;transition:border-color 120ms ease}
+.gitp-commitbox textarea{display:block;box-sizing:border-box;width:100%;height:72px;min-height:72px;overflow-y:hidden;resize:none;padding:8px 10px;border:var(--gitp-hair) solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-sm,8px);background:var(--dsw-specific-input-major,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px;transition:border-color 120ms ease}
 .gitp-commitbox textarea:focus{outline:none;border-color:var(--dsw-alias-state-business-primary)}
 .gitp-commit-status-line{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:0 2px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums}
 .gitp-commit-status-line.has-conflict{color:var(--dsw-alias-state-error-primary)}
@@ -928,7 +1010,7 @@ button[data-forge-header]{display:none}
 .gitp-field{display:flex;flex-direction:column;gap:6px;margin-bottom:14px}
 .gitp-field label{font-size:13px;color:var(--dsw-alias-label-secondary);font-weight:500}
 .gitp-field input,.gitp-field textarea{width:100%;height:36px;padding:0 10px;border:var(--gitp-hair) solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-sm,8px);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-size:13px;transition:border-color 120ms ease}
-.gitp-field textarea{height:80px;padding:8px 10px;resize:vertical;line-height:20px}
+.gitp-field textarea{box-sizing:border-box;height:80px;min-height:80px;padding:8px 10px;resize:vertical;line-height:20px}
 .gitp-field input:focus,.gitp-field textarea:focus{outline:none;border-color:var(--dsw-alias-state-business-primary)}
 .gitp-field-hint{font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary)}
 .gitp-modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:20px}
@@ -981,10 +1063,15 @@ button[data-forge-header]{display:none}
 .gitp-root.is-compact .gitp-rail{margin:0 8px 8px;max-width:calc(100% - 16px)}
 .gitp-root.is-compact .gitp-rail-item{padding:0 12px}
 .gitp-root.is-compact .gitp-changes{flex-direction:column}
-.gitp-root.is-compact .gitp-listcol{width:100%;flex:1;min-height:0;border-right:0}
+.gitp-root.is-compact .gitp-listcol{width:100%;max-width:none;flex:1;min-height:0}
 .gitp-root.is-compact .gitp-diffcol{width:100%;flex:1;min-height:0;height:auto}
 .gitp-root.is-compact .gitp-diff-head{gap:6px;padding:0 4px}
 .gitp-root.is-compact .gitp-error{margin:0 8px 8px}
+.gitp-resizer{position:relative;z-index:1;flex:none;width:0;cursor:col-resize;touch-action:none;-webkit-app-region:no-drag}
+.gitp-resizer::before{content:"";position:absolute;top:0;bottom:0;left:-.25px;width:var(--gitp-hair,.5px);background:var(--dsw-alias-border-l4)}
+.gitp-resizer::after{content:"";position:absolute;inset:0 -4px;opacity:0;transition:opacity 120ms ease-out;background:linear-gradient(to bottom,transparent,var(--dsw-alias-label-caption) 50%,transparent) center / 1px 100% no-repeat}
+.gitp-resizer:hover::after,.gitp-resizer:focus-visible::after,.gitp-resizer:active::after{opacity:1}
+.gitp-resizer:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:0}
 .gitp-settings{--gitp-hair:var(--dsh-hairline-width,.5px);--gitp-ring:var(--dsw-alias-state-business-primary);display:flex;flex-direction:column;gap:24px;max-width:640px}
 .gitp-settings-row{display:flex;flex-direction:column;gap:8px}
 .gitp-settings-copy{display:flex;flex-direction:column;gap:2px}
@@ -1151,6 +1238,8 @@ button[data-forge-header]{display:none}
     function BranchDialog({ t, defaultName, defaultMessage, busy, error, onCreate, onClose }) {
       const [name, setName] = useState(defaultName);
       const [message, setMessage] = useState(defaultMessage);
+      const messageRef = useRef(null);
+      useAutoGrow(messageRef, message);
       const canSubmit = name.trim() !== '' && message.trim() !== '' && !busy;
       return h(
         Modal,
@@ -1174,6 +1263,7 @@ button[data-forge-header]{display:none}
           h('label', { htmlFor: 'gitp-branch-message' }, t('branch.message')),
           h('textarea', {
             id: 'gitp-branch-message',
+            ref: messageRef,
             value: message,
             onChange: (event) => setMessage(event.target.value),
           }),
@@ -1377,6 +1467,11 @@ button[data-forge-header]{display:none}
       onBack,
     }) {
       const [filter, setFilter] = useState('');
+      const [listWidth, setListWidth] = useSplitWidth();
+      const changesRef = useRef(null);
+      const changesListRef = useRef(null);
+      const messageRef = useRef(null);
+      useAutoGrow(messageRef, message);
       const [collapsed, setCollapsed] = useState({ conflicts: false, staged: false, unstaged: false });
       const toggleSection = (key) => setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }));
 
@@ -1404,11 +1499,15 @@ button[data-forge-header]{display:none}
 
       return h(
         'div',
-        { className: 'gitp-changes' },
+        { className: 'gitp-changes', ref: changesRef },
         showList
           ? h(
           'div',
-          { className: 'gitp-listcol' },
+          {
+            className: 'gitp-listcol',
+            ref: changesListRef,
+            style: compact ? undefined : { width: `${listWidth}px` },
+          },
           totalRaw > 0
             ? h(
                 'div',
@@ -1617,6 +1716,7 @@ button[data-forge-header]{display:none}
             'div',
             { className: 'gitp-commitbox' },
             h('textarea', {
+              ref: messageRef,
               value: message,
               onChange: (event) => onMessage(event.target.value),
               onKeyDown: (event) => {
@@ -1713,6 +1813,15 @@ button[data-forge-header]{display:none}
               : null,
           ),
         )
+          : null,
+        showList && showDiff
+          ? h(ColumnResizer, {
+              label: t('split.files'),
+              containerRef: changesRef,
+              columnRef: changesListRef,
+              width: listWidth,
+              onChange: setListWidth,
+            })
           : null,
         showDiff
           ? h(
@@ -2651,6 +2760,9 @@ button[data-forge-header]{display:none}
       const [diffLoading, setDiffLoading] = useState(false);
       const [error, setError] = useState(null);
       const [copiedHash, setCopiedHash] = useState(false);
+      const [listWidth, setListWidth] = useSplitWidth();
+      const logRef = useRef(null);
+      const logListRef = useRef(null);
       const repoRef = useRef(repo);
 
       const copyHash = (hash) => {
@@ -2783,11 +2895,15 @@ button[data-forge-header]{display:none}
 
       return h(
         'div',
-        { className: 'gitp-changes' },
+        { className: 'gitp-changes', ref: logRef },
         showList
           ? h(
               'div',
-              { className: 'gitp-listcol' },
+              {
+                className: 'gitp-listcol',
+                ref: logListRef,
+                style: compact ? undefined : { width: `${listWidth}px` },
+              },
               h(
                 'div',
                 { className: 'gitp-loglist' },
@@ -2919,6 +3035,15 @@ button[data-forge-header]{display:none}
                       ),
               ),
             )
+          : null,
+        showList && showDiff
+          ? h(ColumnResizer, {
+              label: t('split.commits'),
+              containerRef: logRef,
+              columnRef: logListRef,
+              width: listWidth,
+              onChange: setListWidth,
+            })
           : null,
         showDiff
           ? h(
@@ -4026,6 +4151,106 @@ button[data-forge-header]{display:none}
         },
         h(GitMark, { size: 16 }),
       );
+    }
+
+    // Drag, arrow keys, or double-click move the list column. The hairline and
+    // the 8px grab area follow the harness dockkit divider. A drag writes the
+    // width straight to the column so a large diff does not re-render on every
+    // pointer move; the store learns the result once, on release.
+    function ColumnResizer({ label, containerRef, columnRef, width, onChange }) {
+      const drag = useRef(null);
+
+      const maxWidth = () => {
+        const container = containerRef.current;
+        if (container === null) return width;
+        return Math.max(SPLIT_MIN, Math.round(container.getBoundingClientRect().width) - SPLIT_DIFF_MIN);
+      };
+
+      const clamp = (next) => Math.min(Math.max(Math.round(next), SPLIT_MIN), maxWidth());
+
+      useEffect(
+        () => () => {
+          drag.current = null;
+          document.body.style.cursor = '';
+          document.body.style.userSelect = '';
+        },
+        [],
+      );
+
+      // A narrower panel caps the rendered column through CSS; this keeps the
+      // stored value in step so the next drag starts from the divider the user
+      // actually sees.
+      useEffect(() => {
+        const container = containerRef.current;
+        if (container === null || typeof ResizeObserver === 'undefined') return undefined;
+        const observer = new ResizeObserver(() => {
+          const available = Math.round(container.getBoundingClientRect().width);
+          if (available === 0) return;
+          const maximum = Math.max(SPLIT_MIN, available - SPLIT_DIFF_MIN);
+          if (width > maximum) onChange(maximum);
+        });
+        observer.observe(container);
+        return () => observer.disconnect();
+      }, [containerRef, width, onChange]);
+
+      return h('div', {
+        className: 'gitp-resizer',
+        role: 'separator',
+        'aria-orientation': 'vertical',
+        'aria-label': label,
+        'aria-valuemin': SPLIT_MIN,
+        'aria-valuemax': maxWidth(),
+        'aria-valuenow': width,
+        tabIndex: 0,
+        onPointerDown(event) {
+          if (event.button !== 0) return;
+          drag.current = { x: event.clientX, width, next: width };
+          event.currentTarget.setPointerCapture(event.pointerId);
+          document.body.style.cursor = 'col-resize';
+          document.body.style.userSelect = 'none';
+          event.preventDefault();
+        },
+        onPointerMove(event) {
+          const state = drag.current;
+          if (state === null) return;
+          const next = clamp(state.width + (event.clientX - state.x));
+          if (next === state.next) return;
+          state.next = next;
+          if (columnRef.current !== null) columnRef.current.style.width = `${next}px`;
+          event.currentTarget.setAttribute('aria-valuenow', String(next));
+        },
+        onPointerUp(event) {
+          const state = drag.current;
+          if (state === null) return;
+          drag.current = null;
+          if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+            event.currentTarget.releasePointerCapture(event.pointerId);
+          }
+          document.body.style.cursor = '';
+          document.body.style.userSelect = '';
+          onChange(state.next);
+        },
+        onPointerCancel() {
+          drag.current = null;
+          document.body.style.cursor = '';
+          document.body.style.userSelect = '';
+        },
+        onDoubleClick() {
+          onChange(clamp(SPLIT_DEFAULT));
+        },
+        onKeyDown(event) {
+          if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+            event.preventDefault();
+            const step = event.key === 'ArrowRight' ? SPLIT_STEP : -SPLIT_STEP;
+            onChange(clamp(width + step));
+            return;
+          }
+          if (event.key === 'Home') {
+            event.preventDefault();
+            onChange(clamp(SPLIT_DEFAULT));
+          }
+        },
+      });
     }
 
     // The actions a mounted Git tab publishes to global commands. Null while
