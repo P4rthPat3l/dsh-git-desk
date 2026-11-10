@@ -17,6 +17,14 @@
   ],
   "license": "MIT",
   "author": "Parth Patel",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/P4rthPat3l/dsh-git-desk.git"
+  },
+  "homepage": "https://github.com/P4rthPat3l/dsh-git-desk#readme",
+  "bugs": {
+    "url": "https://github.com/P4rthPat3l/dsh-git-desk/issues"
+  },
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
