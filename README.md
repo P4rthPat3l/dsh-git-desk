@@ -4,6 +4,8 @@ A Git tab in the Harness right sidebar. It opens on demand from the Start guide 
 
 ![Horizontal mode tabs over the file list and the split diff](docs/screenshots/overview-dark.png)
 
+![The Git tab docked next to the conversation, staged files and the AI commit menu open](docs/screenshots/app-window-dark.png)
+
 ## Install
 
 The npm package name is `dsh-git-desk`. Add it to the current DSH profile with the plugin manager, then reload the window. For a local checkout, link this folder into the `web` profile as `dsh-git-desk` and reload.
@@ -21,6 +23,8 @@ The tab is not a global panel. It does not sit above the Workspace session list.
 ![Repository picker, two repositories in one workspace](docs/screenshots/repo-menu-dark.png)
 
 ![Split diff in the right sidebar, two arrows per block](docs/screenshots/unstaged-dark.png)
+
+![Unstaged split diff with per-block arrows and the commit box](docs/screenshots/split-diff-dark.png)
 
 ## What it does
 
