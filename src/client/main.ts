@@ -5660,6 +5660,11 @@ export function apply(ctx: ClientContext): void {
         }),
       'dsh-git: right sidebar tab type',
     );
+    const headerButtonInject = (sessionId: string) => ({
+      sessionId,
+      sidebarRight: ctx.sidebarRight,
+      hooks: { visible: visibilityOf(sessionId).hook },
+    });
     ctx.slots.inject('conversation.session.header.utilities', () =>
       ctx.slots.register(
         {
@@ -5667,11 +5672,19 @@ export function apply(ctx: ClientContext): void {
           id: 'git-panel',
           order: -7,
           locale: NS,
-          inject: (sessionId) => ({
-            sessionId,
-            sidebarRight: ctx.sidebarRight,
-            hooks: { visible: visibilityOf(sessionId).hook },
-          }),
+          inject: headerButtonInject,
+        },
+        GitHeaderButton,
+      ),
+    );
+    ctx.slots.inject('conversation.hero.options', () =>
+      ctx.slots.register(
+        {
+          name: 'conversation.hero.options',
+          id: 'git-panel',
+          order: -7,
+          locale: NS,
+          inject: headerButtonInject,
         },
         GitHeaderButton,
       ),

@@ -126,6 +126,7 @@ test('AC-002: apply registers the tab type, slots, and four commands', async () 
     'sidebar.right.pane.tab',
     'sidebar.right.pane.tab.title',
     'conversation.session.header.utilities',
+    'conversation.hero.options',
     'settings.section',
     'settings.section.icon',
   ]) {
