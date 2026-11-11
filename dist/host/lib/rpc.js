@@ -1,6 +1,6 @@
 import { preferences, writeCommitMessage } from './ai.js';
 import { GitError } from './exec.js';
-import { applyBlocks, branches, checkout, cherryPickCommit, commit, commitDetail, createBranch, createBranchAndCommit, discoverRepositories, diff, fetch, findRepository, initRepository, log, pull, push, recentSubjects, resetToCommit, resolveConflict, resolveRepository, revertCommit, stagePaths, stagedPatch, stashApply, stashDrop, stashList, stashPush, status, undoCommit, unstagePaths, } from './git.js';
+import { applyBlocks, branches, checkout, cherryPickCommit, commit, commitDetail, createBranch, createBranchAndCommit, discardPaths, discoverRepositories, diff, fetch, findRepository, initRepository, log, pull, push, recentSubjects, resetToCommit, resolveConflict, resolveRepository, revertCommit, stagePaths, stagedPatch, stashApply, stashDrop, stashList, stashPush, status, undoCommit, unstagePaths, } from './git.js';
 /**
  * Read one field from a client payload.
  * @param payload the payload.
@@ -181,6 +181,8 @@ async function dispatch(ctx, runtime, endpoint, payload) {
             return stagePaths(runtime, root, pathsField(payload, 'paths'));
         case 'unstage':
             return unstagePaths(runtime, root, pathsField(payload, 'paths'));
+        case 'discard':
+            return discardPaths(runtime, root, pathsField(payload, 'paths'), valueOf(payload, 'confirm') === true);
         case 'applyBlocks':
             return applyBlocks(runtime, root, {
                 path: stringField(payload, 'path'),
@@ -194,11 +196,13 @@ async function dispatch(ctx, runtime, endpoint, payload) {
             return commit(runtime, root, {
                 message: optionalString(payload, 'message') ?? '',
                 amend: valueOf(payload, 'amend') === true,
+                noVerify: valueOf(payload, 'noVerify') === true,
             });
         case 'createBranchAndCommit':
             return createBranchAndCommit(runtime, root, {
                 name: stringField(payload, 'name'),
                 message: stringField(payload, 'message'),
+                noVerify: valueOf(payload, 'noVerify') === true,
             });
         case 'push':
             return push(runtime, root);

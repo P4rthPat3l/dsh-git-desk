@@ -74,6 +74,7 @@ interface ApplyBlocksOptions {
 interface CommitOptions {
   message: string;
   amend: boolean;
+  noVerify: boolean;
 }
 
 /** One branch creation request. */
@@ -85,6 +86,7 @@ interface CreateBranchOptions {
 interface CreateBranchAndCommitOptions {
   name: string;
   message: string;
+  noVerify: boolean;
 }
 
 /** One history request that names a commit. */
@@ -889,6 +891,92 @@ export async function unstagePaths(runtime: GitRuntime, root: string, paths: str
 }
 
 /**
+ * Discard every local change to the named files.
+ *
+ * The named entries are restored to HEAD in the index and the working tree. An
+ * untracked file is deleted. A rename is expanded to its recorded old path, so
+ * the old path returns and the new one leaves. The caller must confirm first.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @param paths the caller paths.
+ * @param confirm whether the caller confirmed the loss.
+ * @returns the fresh snapshot.
+ */
+export async function discardPaths(
+  runtime: GitRuntime,
+  root: string,
+  paths: string[],
+  confirm: boolean,
+): Promise<StatusSnapshot> {
+  if (confirm !== true) throw new GitError('git/confirm-required', 'Discarding changes needs confirmation.');
+  const safe = [...new Set(paths.map((value) => repoPath(root, value).path))];
+  if (safe.length === 0) return readStatus(runtime, root);
+  const snapshot = await readStatus(runtime, root);
+  if (snapshot.merging || snapshot.rebasing || snapshot.reverting || snapshot.cherryPicking) {
+    throw new GitError('git/operation', 'Finish the current operation before discarding changes.');
+  }
+  const wanted = new Set(safe);
+  const entries = snapshot.entries.filter((entry) => wanted.has(entry.path));
+  if (entries.length === 0) {
+    throw new GitError('git/stale', 'The file changed after the list was read. Refresh and try again.');
+  }
+  if (entries.some((entry) => entry.conflicted)) {
+    throw new GitError('git/conflict', 'Resolve the conflict instead of discarding it.');
+  }
+  const selected = new Set(entries);
+  for (const entry of entries) {
+    if (entry.from === null || entry.from === undefined) continue;
+    const occupant = snapshot.entries.find((other) => other.path === entry.from && !selected.has(other));
+    if (occupant !== undefined) {
+      throw new GitError(
+        'git/discard-blocked',
+        'The old path of this rename holds another file. Remove or discard that file first.',
+      );
+    }
+  }
+
+  const untracked = new Set<string>();
+  const tracked = new Set<string>();
+  for (const entry of entries) {
+    if (entry.untracked) {
+      untracked.add(entry.path);
+      continue;
+    }
+    tracked.add(entry.path);
+    if (entry.from !== null && entry.from !== undefined) tracked.add(entry.from);
+  }
+  const literal = (values: Iterable<string>): string[] => [...values].map((value) => `:(literal)${value}`);
+
+  if (untracked.size > 0) {
+    const cleaned = await runtime.run(root, ['clean', '-f', '--', ...literal(untracked)]);
+    if (cleaned.code !== 0) throw failure(cleaned, 'Git could not delete the untracked files.');
+  }
+  if (tracked.size > 0) {
+    const specs = literal(tracked);
+    const head = await runtime.run(root, ['rev-parse', '--verify', 'HEAD']);
+    if (head.code === 0) {
+      const restored = await runtime.run(root, ['restore', '--source=HEAD', '--staged', '--worktree', '--', ...specs]);
+      if (restored.code !== 0) throw failure(restored, 'Git could not discard the selected files.');
+    } else {
+      const removed = await runtime.run(root, ['rm', '--cached', '-f', '--', ...specs]);
+      if (removed.code !== 0) throw failure(removed, 'Git could not remove the staged files.');
+      const cleaned = await runtime.run(root, ['clean', '-f', '--', ...specs]);
+      if (cleaned.code !== 0) throw failure(cleaned, 'Git could not delete the selected files.');
+    }
+  }
+  const status = await readStatus(runtime, root);
+  const remaining = [...untracked].filter((path) => status.entries.some((entry) => entry.path === path));
+  if (remaining.length > 0) {
+    throw new GitError(
+      'git/discard-incomplete',
+      `An untracked path could not be deleted: ${remaining.join(', ')}. A nested repository must be removed outside the panel.`,
+      { paths: remaining },
+    );
+  }
+  return status;
+}
+
+/**
  * Commit the staged changes.
  * @param runtime the runtime helpers.
  * @param root the repository root.
@@ -905,8 +993,10 @@ export async function commit(runtime: GitRuntime, root: string, options: CommitO
   if (!snapshot.entries.some((entry) => entry.staged)) {
     throw new GitError('git/nothing-staged', 'Stage at least one file before committing.');
   }
-  const args = ['commit', '-F', '-'];
+  const args = ['commit'];
+  if (options.noVerify === true) args.push('--no-verify');
   if (options.amend === true) args.push('--amend');
+  args.push('-F', '-');
   const result = await runtime.run(root, args, {
     input: message.endsWith('\n') ? message : `${message}\n`,
   });
@@ -982,7 +1072,11 @@ export async function createBranchAndCommit(
     throw new GitError('git/branch-failed', created.stderr.trim() || 'Git could not create the branch.');
   }
   try {
-    return await commit(runtime, root, { message: options.message, amend: false });
+    return await commit(runtime, root, {
+      message: options.message,
+      amend: false,
+      noVerify: options.noVerify === true,
+    });
   } catch (error) {
     if (error instanceof GitError) {
       error.message = `Branch ${name} was created, but the commit failed. ${error.message}`;
@@ -1042,25 +1136,108 @@ export async function push(runtime: GitRuntime, root: string): Promise<Operation
   };
 }
 
+/** The stash message used when a pull has to carry local changes. */
+const PULL_STASH_MESSAGE = 'dsh-git: changes before pull';
+
 /**
- * Pull fast-forward only.
+ * Tell whether Git refused a pull because local changes are in the way.
+ * @param text the combined command output.
+ * @returns whether stashing the changes may let the pull continue.
+ */
+function blockedByLocalChanges(text: string): boolean {
+  return /would be overwritten|cannot pull with rebase|Please commit your changes or stash them|Please commit or stash them|Please move or remove them/i.test(
+    text,
+  );
+}
+
+/**
+ * Build the failure for a pull that did not succeed.
+ * @param result the command result.
+ * @returns the error.
+ */
+function pullFailure(result: RunResult): GitError {
+  return new GitError('git/pull-failed', result.stderr.trim() || result.stdout.trim() || 'Pull failed.', {
+    stdout: result.stdout,
+    stderr: result.stderr,
+  });
+}
+
+/**
+ * Pull fast-forward only, carrying local changes through a stash.
+ *
+ * Git refuses a fast-forward when the update touches a file with local changes,
+ * and when an untracked file would be overwritten. The working tree is stashed,
+ * the pull is retried, and the stash is popped with the index intact. A pop
+ * conflict keeps the stash and reports it, because the pull itself succeeded.
  * @param runtime the runtime helpers.
  * @param root the repository root.
- * @returns the command output and status.
+ * @returns the command output, status, and whether local changes were carried.
  */
 export async function pull(runtime: GitRuntime, root: string): Promise<OperationResult> {
   const remote = await remoteStatus(runtime, root);
   if (remote.upstream === null) throw new GitError('git/no-upstream', 'This branch has no upstream branch.');
-  const result = await runtime.run(root, ['pull', '--ff-only'], { network: true });
+  const args = ['pull', '--ff-only', '--no-rebase'];
+  let result = await runtime.run(root, args, { network: true });
+  let autoStash: OperationResult['autoStash'];
   if (result.code !== 0) {
-    throw new GitError('git/pull-failed', result.stderr.trim() || result.stdout.trim() || 'Pull failed.', {
-      stdout: result.stdout,
-      stderr: result.stderr,
-    });
+    const text = `${result.stderr}\n${result.stdout}`;
+    const status = blockedByLocalChanges(text) ? await readStatus(runtime, root) : null;
+    if (
+      status === null ||
+      status.entries.length === 0 ||
+      status.conflicts.length > 0 ||
+      status.merging ||
+      status.rebasing ||
+      status.reverting ||
+      status.cherryPicking
+    ) {
+      throw pullFailure(result);
+    }
+
+    const includeUntracked = /untracked working tree files would be overwritten/i.test(text);
+    const before = await runtime.run(root, ['rev-parse', '-q', '--verify', 'refs/stash']);
+    const stashed = await runtime.run(root, [
+      'stash',
+      'push',
+      ...(includeUntracked ? ['--include-untracked'] : []),
+      '-m',
+      PULL_STASH_MESSAGE,
+    ]);
+    const after = await runtime.run(root, ['rev-parse', '-q', '--verify', 'refs/stash']);
+    if (stashed.code !== 0 || after.stdout.trim() === before.stdout.trim()) throw pullFailure(result);
+
+    result = await runtime.run(root, args, { network: true });
+    const current = await runtime.run(root, ['rev-parse', '-q', '--verify', 'refs/stash']);
+    const otherStash = current.stdout.trim() !== after.stdout.trim();
+    if (result.code !== 0) {
+      if (otherStash) {
+        throw new GitError(
+          'git/pull-stash-failed',
+          `${pullFailure(result).message} Another stash was created while the pull ran, so the local changes stay in the stash.`,
+          { stdout: result.stdout, stderr: result.stderr },
+        );
+      }
+      const restored = await runtime.run(root, ['stash', 'pop', '--index', 'stash@{0}']);
+      if (restored.code !== 0) {
+        throw new GitError(
+          'git/pull-stash-failed',
+          `${pullFailure(result).message} The local changes could not be restored and remain in the stash.`,
+          { stdout: result.stdout, stderr: result.stderr },
+        );
+      }
+      throw pullFailure(result);
+    }
+    if (otherStash) {
+      autoStash = 'conflict';
+    } else {
+      const restored = await runtime.run(root, ['stash', 'pop', '--index', 'stash@{0}']);
+      autoStash = restored.code === 0 ? 'restored' : 'conflict';
+    }
   }
   return {
     output: `${result.stdout}${result.stderr}`.trim(),
     status: await readStatus(runtime, root),
+    ...(autoStash === undefined ? {} : { autoStash }),
   };
 }
 

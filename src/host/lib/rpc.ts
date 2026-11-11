@@ -11,6 +11,7 @@ import {
   commitDetail,
   createBranch,
   createBranchAndCommit,
+  discardPaths,
   discoverRepositories,
   diff,
   fetch,
@@ -239,6 +240,8 @@ async function dispatch(
       return stagePaths(runtime, root, pathsField(payload, 'paths'));
     case 'unstage':
       return unstagePaths(runtime, root, pathsField(payload, 'paths'));
+    case 'discard':
+      return discardPaths(runtime, root, pathsField(payload, 'paths'), valueOf(payload, 'confirm') === true);
     case 'applyBlocks':
       return applyBlocks(runtime, root, {
         path: stringField(payload, 'path'),
@@ -252,11 +255,13 @@ async function dispatch(
       return commit(runtime, root, {
         message: optionalString(payload, 'message') ?? '',
         amend: valueOf(payload, 'amend') === true,
+        noVerify: valueOf(payload, 'noVerify') === true,
       });
     case 'createBranchAndCommit':
       return createBranchAndCommit(runtime, root, {
         name: stringField(payload, 'name'),
         message: stringField(payload, 'message'),
+        noVerify: valueOf(payload, 'noVerify') === true,
       });
     case 'push':
       return push(runtime, root);

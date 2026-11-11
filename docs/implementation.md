@@ -79,11 +79,12 @@ Every write returns a fresh status snapshot. The client renders only from that s
 | `init` | `workspaceId` | Status after `git init`, plus the repository list |
 | `diff` | `workspaceId`, `repo`, `path`, `side`, optional `commit`, `parent` | Full-file diff |
 | `stage`, `unstage` | `workspaceId`, `repo`, `paths` | Status |
+| `discard` | `workspaceId`, `repo`, `paths`, `confirm` | Status; tracked files return to `HEAD`, untracked files are deleted |
 | `applyBlocks` | `workspaceId`, `repo`, `path`, `side`, `blocks`, `baseHash`, `targetHash`, `confirm` | Status |
-| `commit` | `workspaceId`, `repo`, `message`, `amend` | Hash, output, status |
+| `commit` | `workspaceId`, `repo`, `message`, `amend`, `noVerify` | Hash, output, status; `--no-verify` when `noVerify` is true |
 | `createBranch` | `workspaceId`, `repo`, `name` | Output, status |
-| `createBranchAndCommit` | `workspaceId`, `repo`, `name`, `message` | Hash, output, status |
-| `push`, `pull`, `fetch` | `workspaceId`, `repo` | Output, status |
+| `createBranchAndCommit` | `workspaceId`, `repo`, `name`, `message`, `noVerify` | Hash, output, status; the commit passes `--no-verify` when asked |
+| `push`, `pull`, `fetch` | `workspaceId`, `repo` | Output, status; `pull` adds `autoStash` (`restored` or `conflict`) when it carried local changes |
 | `log` | `workspaceId`, `repo` | Up to 100 commits |
 | `commitDetail` | `workspaceId`, `repo`, `hash` | Commit and changed files |
 | `undoCommit` | `workspaceId`, `repo`, `hash` | Soft reset to the parent; the undone message and status |
@@ -137,6 +138,50 @@ Review regression cases:
 - Refuse block actions on a rename.
 
 The run reported `review regression cases passed`.
+
+Commit hooks, against a temporary repository:
+
+- A failing pre-commit hook refused a normal commit and left the staged change in place.
+- Skip hooks committed through the failing hook.
+- Branch and commit passed skip hooks through.
+
+The run reported three passing cases in `tests/commit.test.mjs`.
+
+Not verified live: the two Skip hooks checkboxes. The panel was not rendered in this session.
+
+Pull auto-stash, against local remote repositories:
+
+- A blocked tracked change is stashed, the pull fast-forwards, and the stash pops with the index intact.
+- A change the update does not touch creates no stash.
+- An untracked file the update would overwrite is stashed and kept when the pop cannot restore it.
+- A conflicting pop keeps the stash and returns `autoStash: 'conflict'`.
+- A failed retry restores the temporary stash and reports the pull error.
+- A failed retry and a failed restore keep the stash and name it in the error.
+- A mixed tracked and untracked stash restores the tracked part and keeps the whole stash.
+- A stash created while the pull runs is never popped.
+- A divergent pull leaves the working tree and the stash list unchanged.
+
+The run reported nine passing cases in `tests/pull.test.mjs`.
+
+Not verified live: the switch to Changes and the persistent conflict notice. The panel was not rendered in this session; the host result is covered by the tests.
+
+Discard, against temporary repositories:
+
+- A modified tracked file returns to `HEAD`.
+- A file with staged and unstaged changes loses both.
+- A staged rename returns the old path and removes the new one.
+- An untracked file is deleted, and a literal `*` in the name does not widen the delete.
+- A missing confirmation is refused.
+- A repository without a commit removes the staged file from the index and disk.
+- A staged new file in a repository with a commit is deleted.
+- A merge in progress refuses the discard.
+- An untracked nested repository is left in place and reported.
+- Selecting an untracked path that reuses a rename's old path leaves the rename alone.
+- A rename whose old path holds another file is refused.
+
+The run reported eleven passing cases in `tests/discard.test.mjs`.
+
+Not verified live: the trash control and its confirmation dialog. The panel was not rendered in this session; the host path is covered by the tests.
 
 HTTP envelope test:
 
@@ -216,6 +261,10 @@ Not verified live: the running app was booted before the rename and this change,
 - History actions refuse a merge, rebase, revert, or cherry-pick in progress. A revert is left pending until it is committed, so the History menu stays blocked until the user commits or aborts that revert outside the panel. The panel does not yet offer Continue or Abort for a cherry-pick or a revert.
 - Undo is limited to HEAD. Revert and cherry-pick refuse merge commits. There is no drop, squash, fixup, edit-message, tag, or per-file revert, and no interactive rebase.
 - Status is polled every 8 seconds while the panel is visible, plus after every write and on window focus. There is no Host filesystem watch.
+- Pull is fast-forward only. When the stashed changes cannot be restored cleanly, the stash is kept instead of guessing a merge. When an untracked file would be overwritten, every untracked file joins the stash so the pull can proceed; an untracked collision keeps its local content in the stash while the checked-out version stays in the working tree.
+- Discard has no local undo. It is refused for a conflicted file, while a merge, rebase, revert, or cherry-pick is in progress, and for a rename whose old path holds another file. An untracked nested repository is not deleted; the error asks for its removal outside the panel.
+- Skip hooks is off by default, is not persisted, and only bypasses `pre-commit` and `commit-msg` through `--no-verify`. Other hooks are unaffected.
+- A pull's temporary stash is popped only when `refs/stash` still matches the hash saved after stashing. A stash created during a slow pull stays untouched; after a failed retry the pull throws, and after a successful retry it keeps the stash and returns `autoStash: 'conflict'`. A mixed tracked and untracked stash restores the tracked part before the untracked collision keeps the whole stash.
 
 ## Verified, 0.16.0 preferences and key bindings
 

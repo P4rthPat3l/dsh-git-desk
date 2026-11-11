@@ -6,7 +6,7 @@ implementation_status: shipped_unverified
 version: 0.18.0
 owners: [Parth Patel]
 created: 2026-11-09
-last_updated: 2026-11-10
+last_updated: 2026-11-11
 last_verified_commit: none
 ---
 
@@ -206,9 +206,10 @@ The implemented wire contract is JSON over the authenticated `/git-rpc` channel.
 | `diff` | workspace, path, side, commit, parent | Full-file diff |
 | `stage` | workspace, paths | `git add` |
 | `unstage` | workspace, paths | `git restore --staged` |
+| `discard` | workspace, paths, confirm | Restore tracked files to HEAD, delete untracked files |
 | `applyBlocks` | workspace, path, side, blocks, hashes, confirm | Rebuild the index or working tree |
-| `commit` | workspace, message, amend | `git commit -F -` |
-| `createBranchAndCommit` | workspace, name, message | Create the branch, commit staged blocks |
+| `commit` | workspace, message, amend, noVerify | `git commit -F -`, with `--no-verify` when asked |
+| `createBranchAndCommit` | workspace, name, message, noVerify | Create the branch, commit staged blocks |
 | `push`, `pull`, `fetch` | workspace | Network, no force |
 | `log` | workspace | Up to 100 commits |
 | `commitDetail` | workspace, hash | Commit and files |
@@ -231,7 +232,7 @@ Every command runs with `LC_ALL=C`, `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS
 | `dsh-git/src/host/index.ts` | Implemented | Host entry and `/git-rpc` registration |
 | `dsh-git/src/host/lib/exec.ts` | Implemented | Spawn, env, timeout, cancellation, filesystem reads for discovery |
 | `dsh-git/src/host/lib/parse.ts` | Implemented | Porcelain v2, numstat, hunks, full-file rows, log, stash |
-| `dsh-git/src/host/lib/git.ts` | Implemented | Repository discovery, status, diff, block writes, branch create and checkout, commit, sync, log, stash, conflicts |
+| `dsh-git/src/host/lib/git.ts` | Implemented | Repository discovery, status, diff, block writes, branch create and checkout, commit, file discard, sync, log, stash, conflicts |
 | `dsh-git/src/host/lib/rpc.ts` | Implemented | Endpoint dispatch, repository validation, workspace resolution |
 | `dsh-git/src/host/lib/http.ts` | Implemented | Authenticated JSON envelope |
 | `dsh-git/client.js` | Implemented | Right-tab body and title, session header button, repository picker, session auto-open, branch menu and new-branch dialog, Start-guide card, compact and wide layouts, split and unified diff, dialogs, locales, styles |
@@ -265,6 +266,9 @@ Every command runs with `LC_ALL=C`, `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS
 - BR-022. Revert requires a clean index, because a revert mixes with whatever is already staged. It stages the inverse change and the message `Revert "<subject>"` with the `This reverts commit <hash>.` line, then opens Changes. The commit stays in history. A merge commit is refused. A conflicting revert stays pending in the working tree and is finished by a normal commit after resolution.
 - BR-023. Cherry-pick refuses a merge commit, an unresolved conflict, and a commit whose patch is already applied to the branch. A successful pick commits immediately with the original message. A conflicting pick is aborted, so the branch and the working tree are unchanged.
 - BR-024. Reset requires an explicit mode and a confirmation. Hard reset discards tracked changes and warns that it cannot be undone. A detached HEAD is refused.
+- BR-025. Pull is fast-forward only even when the repository sets `pull.rebase`. When Git refuses the update because local changes are in the way, the working tree is stashed, the pull is retried, and the stash is popped with the index intact, so staged files stay staged. When an untracked file would be overwritten, every untracked file joins the stash so the pull can proceed; the whole stash is restored or kept. If the pop cannot apply cleanly, the pull stays applied, the stash is kept, and the client reports it.
+- BR-026. Discard changes restores the named files to HEAD in the index and the working tree and removes them from Staged and Unstaged. The request names the exact selected entries; the host expands a rename by its recorded old path. An untracked file is deleted from disk, but an untracked nested repository is left in place and reported. Discarding a rename is refused when another unselected file occupies its old path. The host requires a confirmation, refuses a conflicted file, and refuses while a merge, rebase, revert, or cherry-pick is in progress. There is no local undo.
+- BR-027. The commit box and the branch dialog offer Skip hooks. When it is checked, the host commits with `git commit --no-verify`; otherwise Git hooks run. The option defaults off, is not persisted, and applies to a normal commit, an amend, and a branch and commit. The host only skips hooks when the request asks for it.
 
 ## 13. Acceptance criteria
 
@@ -320,6 +324,29 @@ Every command runs with `LC_ALL=C`, `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS
 | AC-048 | Revert commit stages the inverse change for a non-merge commit when the index is clean, fills `Revert "<subject>"` and the `This reverts commit <hash>.` line, and switches to Changes. Committing finishes the revert. A conflicted revert stays pending with the conflict group, and committing after resolution finishes it. A merge commit or a dirty index is refused. |
 | AC-049 | Cherry-pick applies a non-merge commit that is not already applied and commits it on the current branch with the original message, then refreshes the log. On conflict the pick is aborted, the branch and working tree are unchanged, and the error names the conflicted paths. A merge commit, an applied commit, and an unresolved conflict are refused. |
 | AC-050 | Reset branch to here opens a dialog with Soft, Mixed, and Hard, the target hash, and a confirmation. Soft leaves the changes staged, Mixed leaves them unstaged, and Hard discards them after a warning. The dialog reports a host error without closing. Detached HEAD is refused. |
+| AC-051 | A pull with a local change to a file the update also changes stashes the change, fast-forwards, and restores it, keeping an already staged file staged. |
+| AC-052 | A pull with a local change the update does not touch fast-forwards without creating a stash. |
+| AC-053 | A pull with an untracked file that the update would overwrite completes, keeps the local file in the stash, and shows a notice that the restore was incomplete. |
+| AC-054 | When restoring the stashed changes conflicts with the update, the pull stays applied, the panel switches to Changes, the conflict is shown, the stash is kept, and a notice that the status poll does not clear says the restore was incomplete. |
+| AC-055 | A pull refused because the branches diverged leaves the working tree and the stash list unchanged. |
+| AC-056 | Discard changes on a modified tracked file restores the HEAD content and removes the file from Staged and Unstaged. |
+| AC-057 | Discard on a file with staged and unstaged changes clears both the index and the working tree. |
+| AC-058 | Discard on a staged rename restores the old path and removes the new path. |
+| AC-059 | Discard on an untracked file deletes it from disk, and a file name containing a literal wildcard character deletes only that file. |
+| AC-060 | Discard requires an explicit confirmation; without it the host refuses and the file stays unchanged. |
+| AC-061 | Discard in a repository with no commit removes the staged file from the index and from disk. |
+| AC-062 | When the retried pull fails, the stashed local changes return to the working tree, the pull error is shown, and the temporary stash is gone. |
+| AC-063 | When both the retried pull and the stash restore fail, the error says the changes remain in the stash and the stash keeps them. |
+| AC-064 | When the stash mixes tracked and untracked changes, the tracked part returns to the working tree, the untracked collision keeps the whole stash, and the notice says the restore was incomplete. |
+| AC-065 | A stash created while the pull runs is never popped; the pull reports that its own local changes remain in the stash. |
+| AC-066 | Discard deletes a staged new file in a repository with a commit. |
+| AC-067 | Discard is refused while a merge is in progress. |
+| AC-068 | Discard does not delete an untracked nested repository; it reports the path and leaves the files alone. |
+| AC-069 | Selecting an untracked path that reuses a rename's old path deletes only that file and leaves the rename staged. |
+| AC-070 | Discarding a rename is refused when another file occupies its old path; both files stay untouched. |
+| AC-071 | A failing pre-commit hook refuses a normal commit, shows the hook output, and leaves the message and staged files in place. |
+| AC-072 | With Skip hooks checked, the commit succeeds through the failing hook and the resulting commit has the typed message. |
+| AC-073 | Branch and commit passes Skip hooks through, so the branch is created and the commit lands despite the failing hook. |
 
 ## 14. Security and privacy
 
@@ -328,6 +355,7 @@ Every command runs with `LC_ALL=C`, `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS
 - SEC-003. Credentials are never read, logged, or stored. Authentication is delegated to the user's Git credential helper.
 - SEC-004. Diff and commit content may contain secrets. It stays local and is never sent to a model unless the user explicitly asks for a message. The two AI commit actions do exactly that: they send the staged patch and the last five commit subjects to the provider selected in Settings, and nothing else.
 - SEC-005. Push, pull, and branch checkout are the only network and state-moving operations, and each requires an explicit action.
+- SEC-006. Discard deletes local work. The host requires `confirm: true`, the client names the file in the dialog, and discard is refused for a conflicted file or while a merge, rebase, revert, or cherry-pick is in progress.
 
 ## 15. Failure behavior
 
@@ -336,9 +364,17 @@ Every command runs with `LC_ALL=C`, `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS
 | `git` missing | Panel shows "Git is not installed" with the searched path |
 | Not a repository | Panel offers "Initialize repository"; no destructive default |
 | Command timeout | Cancel the operation, show the command and timeout |
-| Hook failure | Show hook stdout and stderr, keep the message and staged files |
+| Hook failure | Show hook stdout and stderr, keep the message and staged files; Skip hooks commits anyway |
 | Stale block | Refresh the diff, explain that the file changed, do not silently retry |
 | Permission denied | Show the path and the OS error |
+| Pull restore conflict | The pull stays applied, the panel switches to Changes, the conflict group opens, the stash is kept, and a persistent notice says the restore was incomplete |
+| Pull retry fails | The stashed changes return to the working tree, the temporary stash is dropped, and the pull error is shown |
+| Pull retry and restore fail | The stash is kept, the error names it, and the changes stay in it |
+| Pull mixed stash | The tracked part returns to the working tree, the untracked collision keeps the whole stash, and the notice says the restore was incomplete |
+| Discard without confirmation | The host refuses with `git/confirm-required`; the confirmation dialog is the only caller |
+| Discard a conflicted file | The host refuses; the conflict stays for the accept buttons |
+| Discard a rename whose old path is occupied | The host refuses; the untracked or other file at the old path stays untouched |
+| Discard an untracked nested repository | The host does not delete it; the row stays and the error says it must be removed outside the panel |
 | Detached HEAD | Show the short sha instead of a branch; push explains that there is no upstream |
 | Binary file | Show "Binary file changed" and the size delta, no diff |
 | Empty repository | Empty state with the first-commit path |
@@ -361,7 +397,10 @@ Status refresh is debounced by 150ms and invalidated by the host's file watch. D
 - Parsers: fixture repos for porcelain v2 and patches, including renames, binary files, CRLF, and no trailing newline.
 - Staging: a temporary repository, stage one block of three, assert `git diff --cached` and the working tree.
 - Stash: file and hunk selection, assert remaining files and stash message.
-- Sync: local bare remote, ahead and behind, rejected push, fast-forward pull.
+- Sync: local bare remote, ahead and behind, rejected push, fast-forward pull, and a dirty working tree that is stashed and restored.
+- Discard: a modified file, staged and unstaged changes together, a staged rename, an untracked file, a look-alike path with a literal wildcard, a missing confirmation, a repository without a commit, a staged new file, a merge in progress, a nested repository, and a rename whose old path is occupied.
+- Pull failure paths: a failed retry restores the temporary stash, a failed restore keeps it, a mixed tracked and untracked stash restores the tracked part, and a stash created during the pull is never popped.
+- Commit hooks: a failing pre-commit hook blocks a normal commit, Skip hooks commits through it, and branch and commit passes the flag through.
 - Conflicts: a prepared merge conflict, resolve each side, commit.
 - UI: one integration test per acceptance criterion that renders the panel against a stubbed Remote.
 - Visual: the mockup screenshots and the plugin screenshots in `docs/screenshots/`, dark and light.
@@ -429,6 +468,9 @@ These were open during design and are decided for 0.6.0.
 - 2026-11-10: added a Git button to the session header next to the change request button, so the panel is reachable without opening the tab strip. The tab body reports its visibility so the button can show a pressed state. The stylesheet now installs once at module scope instead of inside the panel, because the header button needs it while the tab is closed. The stylesheet also hides the built-in change request button in that strip, which uses a similar branch glyph; its panel keeps its tab and opens from the tab strip. Bumped to 0.15.0.
 - 2026-11-10: the list and diff columns are separated by a draggable divider in Changes and History, with keyboard control, a shared stored width, and the same hairline and grab area as the harness split panes. The commit message field now grows to show a generated title and body instead of clipping them behind a fixed 72px box; it scrolls only past 45% of the panel height. Bumped to 0.17.0.
 - 2026-11-10: History commits carry a menu with undo, revert, cherry-pick, and reset, following the JetBrains Log actions and their guards. Undo is limited to an unpushed HEAD and keeps the change staged. Revert stages the inverse change with a generated message and opens Changes. Cherry-pick commits immediately and aborts on conflict. Reset offers soft, mixed, and hard behind a confirmation. Status now reports a pending revert or cherry-pick. Bumped to 0.18.0.
+- 2026-11-11: a pull that Git refuses because of local changes stashes the working tree, retries, and pops the stash with the index intact, so the user no longer unstages manually before pulling. When the update would overwrite an untracked file, every untracked file joins the stash so the pull can proceed. A conflicting restore keeps the stash and reports it. Pull now passes `--no-rebase`, so the fast-forward rule holds when the repository sets `pull.rebase`. The stash is popped only while it is still the top stash, so a stash created during a slow pull is never popped. A conflicting restore switches to Changes and shows a notice that stays until it is closed or another sync runs.
+- 2026-11-11: added a Skip hooks option to the commit box and the branch dialog. With it checked, commit, amend, and branch and commit pass `--no-verify`, so a failing hook can be bypassed without leaving the panel. The option defaults off and is not persisted.
+- 2026-11-11: added Discard changes to the diff header for working-tree files. Tracked files return to HEAD in the index and working tree, untracked files are deleted, and a rename is restored by its old path. The host requires the confirmation, refuses conflicts or an operation in progress, refuses a rename whose old path holds another file, and leaves an untracked nested repository in place with an error.
 
 ## 24. Implementation status
 
@@ -448,11 +490,12 @@ Status is partial: the core flows work, and the remaining gaps are named rather 
 | History commit actions | Added in 0.18.0. Undo, revert, cherry-pick, and reset sit behind a commit menu with per-row reasons. Host rules are verified against a temporary repository; the menu and reset dialog render under React server rendering; not exercised in the running page. |
 | Stage one unstaged block, unstage one staged block | Done. Index blobs verified in the host run. |
 | Revert one local block with confirmation | Done. Confirmation is required by the host, not only the dialog. |
-| Commit and amend | Done. The host requires a staged file for amend too. |
+| Commit and amend | Done. The host requires a staged file for amend too. Skip hooks commits with `--no-verify` from the commit box or the branch dialog. |
 | Branch and commit | Done. Push remains the next explicit action. |
-| Fetch, pull, push | Implemented, not exercised against a live remote. |
+| Fetch, pull, push | Implemented. Pull stashes local changes that block the fast-forward, restores them, and keeps the stash when the restore conflicts. Covered by `tests/pull.test.mjs` against local remote repositories; not exercised against a live network remote. |
 | Log, lanes, refs, commit detail, read-only parent diff | Done. |
 | File-level stash | Done. |
+| File discard | Done. The diff header's trash control restores tracked files to HEAD, deletes untracked files, and restores a rename. The host requires confirmation and refuses conflicts or an operation in progress. Covered by `tests/discard.test.mjs`. |
 | Hunk-level stash | Not implemented. |
 | Conflict detection and whole-side resolve | Done. |
 | Three-pane merge editor | Not implemented. |
@@ -477,6 +520,8 @@ Status is partial: the core flows work, and the remaining gaps are named rather 
 Verification runs:
 
 - Host core against a temporary repository: status, row building, block stage, block unstage, confirmed revert, commit, branch and commit, log, detail, stash, conflict resolve. Result: `git core: all checks passed`.
+- Commit hooks against a temporary repository: a failing pre-commit hook refused a normal commit, Skip hooks committed through it, and branch and commit passed the flag through. Result: `npm test` passes the three commit cases.
+- Pull auto-stash against local remote repositories: blocked tracked changes restored with the index intact, a non-overlapping change left unstashed, an overwritten untracked file kept in the stash, a conflicting restore kept in the stash, a failed retry that restores the stash, a failed retry and restore that keep it, a mixed stash that restores the tracked part, a stash created during the pull that is never popped, and a divergent pull left untouched. Result: `npm test` passes the nine pull cases.
 - HTTP envelope: owner result, forbidden non-owner, method mismatch, wrong method. Result: `http route: all checks passed`.
 - Client bundle with React in Chromium: slot registration, group list, one arrow in Staged, two in Unstaged, stage, revert dialog, resolve, commit, branch dialog, default name, log, log diff, stash, light theme, zero console errors. Result: both slots registered, icon registered, `errors []`.
 

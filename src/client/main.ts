@@ -56,6 +56,7 @@ interface GitMethods {
   diff: DiffPayload;
   stage: StatusSnapshot;
   unstage: StatusSnapshot;
+  discard: StatusSnapshot;
   applyBlocks: StatusSnapshot;
   resolve: StatusSnapshot;
   commit: CommitResult;
@@ -219,6 +220,7 @@ const EN = {
   'action.pop': 'Pop',
   'action.drop': 'Drop',
   'action.stash': 'Stash changes',
+  'action.discard': 'Discard changes',
   'action.acceptOurs': 'Accept ours',
   'action.acceptTheirs': 'Accept theirs',
   'action.retry': 'Retry',
@@ -257,6 +259,8 @@ const EN = {
   'commit.hintMessage': 'Write a commit message.',
   'commit.done': 'Committed {hash}',
   'commit.amend': 'Amend last commit',
+  'commit.noVerify': 'Skip hooks',
+  'commit.noVerifyHint': 'Commit without running Git hooks.',
   'branch.title': 'Branch and commit',
   'branch.name': 'Branch name',
   'branch.nameHint': 'Created from the current HEAD, then the staged changes are committed.',
@@ -285,8 +289,18 @@ const EN = {
   'stash.dropped': 'Dropped {ref}',
   'stash.dropTitle': 'Drop stash',
   'stash.dropBody': 'This deletes {ref} permanently. The changes are not applied.',
+  'discard.title': 'Discard changes?',
+  'discard.body': 'Every local change in {path} is lost. This cannot be undone.',
+  'discard.deleteTitle': 'Delete untracked file?',
+  'discard.deleteBody': '{path} is untracked. The file is removed from disk. This cannot be undone.',
+  'discard.confirm': 'Discard changes',
+  'discard.deleteConfirm': 'Delete file',
+  'discard.done': 'Discarded changes in {name}',
+  'discard.deleted': 'Deleted {name}',
   'sync.fetched': 'Fetched',
   'sync.pulled': 'Pulled',
+  'sync.pulledStashed': 'Pulled and restored local changes',
+  'sync.pulledStashConflict': 'Pulled, but some local changes could not be restored. The stash is kept in Stashes.',
   'sync.pushed': 'Pushed',
   'sync.ahead': '{count} ahead',
   'sync.behind': '{count} behind',
@@ -454,6 +468,7 @@ const ZH = {
   'action.pop': '弹出',
   'action.drop': '删除',
   'action.stash': '贮藏更改',
+  'action.discard': '丢弃更改',
   'action.acceptOurs': '采用本地',
   'action.acceptTheirs': '采用远端',
   'action.retry': '重试',
@@ -492,6 +507,8 @@ const ZH = {
   'commit.hintMessage': '写一条提交信息。',
   'commit.done': '已提交 {hash}',
   'commit.amend': '修补上次提交',
+  'commit.noVerify': '跳过钩子',
+  'commit.noVerifyHint': '提交时不运行 Git 钩子。',
   'branch.title': '分支并提交',
   'branch.name': '分支名',
   'branch.nameHint': '从当前 HEAD 创建分支，然后提交已暂存的更改。',
@@ -520,8 +537,18 @@ const ZH = {
   'stash.dropped': '已删除 {ref}',
   'stash.dropTitle': '删除贮藏',
   'stash.dropBody': '这会永久删除 {ref}，且不会应用其中的更改。',
+  'discard.title': '丢弃更改？',
+  'discard.body': '{path} 的所有本地更改都会丢失。此操作无法撤销。',
+  'discard.deleteTitle': '删除未跟踪文件？',
+  'discard.deleteBody': '{path} 未被跟踪。文件将从磁盘删除。此操作无法撤销。',
+  'discard.confirm': '丢弃更改',
+  'discard.deleteConfirm': '删除文件',
+  'discard.done': '已丢弃 {name} 的更改',
+  'discard.deleted': '已删除 {name}',
   'sync.fetched': '已获取',
   'sync.pulled': '已拉取',
+  'sync.pulledStashed': '已拉取并恢复本地更改',
+  'sync.pulledStashConflict': '已拉取，但部分本地更改未能恢复。更改仍保留在“贮藏”中。',
   'sync.pushed': '已推送',
   'sync.ahead': '领先 {count}',
   'sync.behind': '落后 {count}',
@@ -1050,6 +1077,7 @@ const paths = {
   cherry:
     'M12 17.5m-3.5 0a3.5 3.5 0 1 0 7 0a3.5 3.5 0 1 0 -7 0M7 6.5m-2.5 0a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0 -5 0M12 14c0-3 2-5.5 6-7M12 14c-1-2.5-2.5-4-5-5.5',
   reset: 'M3 12a9 9 0 1 0 3-6.7M3 4v5h5M12 8v4l2.5 2',
+  trash: 'M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v5M14 11v5',
 };
 
 const ROW = 20;
@@ -1166,8 +1194,10 @@ button[data-forge-header]{display:none}
 .gitp-commit-status-line{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:0 2px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums}
 .gitp-commit-status-line.has-conflict{color:var(--dsw-alias-state-error-primary)}
 .gitp-commit-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-.gitp-amend{display:inline-flex;align-items:center;gap:6px;padding-left:2px;font-size:12px;color:var(--dsw-alias-label-secondary);cursor:pointer;flex:none;margin-right:auto;user-select:none}
-.gitp-amend input,.gitp-check input{width:14px;height:14px;margin:0;accent-color:var(--dsw-alias-brand-primary);cursor:pointer}
+.gitp-commit-opts{display:flex;align-items:center;gap:12px;margin-right:auto;min-width:0;flex-wrap:wrap}
+.gitp-amend{display:inline-flex;align-items:center;gap:6px;padding-left:2px;font-size:12px;color:var(--dsw-alias-label-secondary);cursor:pointer;flex:none;user-select:none}
+.gitp-dialog-option{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--dsw-alias-label-secondary);cursor:pointer;flex:none;user-select:none}
+.gitp-amend input,.gitp-check input,.gitp-dialog-option input{width:14px;height:14px;margin:0;accent-color:var(--dsw-alias-brand-primary);cursor:pointer}
 .gitp-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:32px;padding:0 14px;border:0;border-radius:var(--dsw-radius-sm,8px);background:transparent;box-shadow:inset 0 0 0 var(--gitp-hair) var(--dsw-alias-border-l3);color:var(--dsw-alias-label-primary);cursor:pointer;font-size:13px;font-weight:500;flex:none;white-space:nowrap;transition:background-color 120ms ease,opacity 120ms ease;user-select:none}
 .gitp-btn:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}
 .gitp-btn:active:not(:disabled){background:var(--dsw-alias-interactive-bg-active)}
@@ -1587,12 +1617,24 @@ interface BranchDialogProps {
   defaultName: string;
   defaultMessage: string;
   busy: boolean;
+  noVerify: boolean;
   error?: React.ReactNode;
   onCreate: (value: { name: string; message: string }) => void;
+  onNoVerify: (next: boolean) => void;
   onClose: () => void;
 }
 
-function BranchDialog({ t, defaultName, defaultMessage, busy, error, onCreate, onClose }: BranchDialogProps) {
+function BranchDialog({
+  t,
+  defaultName,
+  defaultMessage,
+  busy,
+  noVerify,
+  error,
+  onCreate,
+  onNoVerify,
+  onClose,
+}: BranchDialogProps) {
   const [name, setName] = useState(defaultName);
   const [message, setMessage] = useState(defaultMessage);
   const messageRef = useRef<HTMLTextAreaElement | null>(null);
@@ -1624,6 +1666,17 @@ function BranchDialog({ t, defaultName, defaultMessage, busy, error, onCreate, o
         value: message,
         onChange: (event: React.ChangeEvent<HTMLTextAreaElement>) => setMessage(event.target.value),
       }),
+    ),
+    h(
+      'label',
+      { className: 'gitp-dialog-option', title: t('commit.noVerifyHint') },
+      h('input', {
+        type: 'checkbox',
+        checked: noVerify,
+        onChange: (event) => onNoVerify(event.target.checked),
+        disabled: busy,
+      }),
+      t('commit.noVerify'),
     ),
     error ? h('div', { className: 'gitp-modal-error' }, error) : null,
     h(
@@ -1827,6 +1880,7 @@ interface ChangesViewProps {
   fileBusy: boolean;
   onToggleFile: (entry: StatusEntry, side: 'staged' | 'unstaged') => void;
   onToggleAll: (side: 'staged' | 'unstaged') => void;
+  onDiscard: (entry: StatusEntry) => void;
   diff: DiffPayload | null;
   diffLoading: boolean;
   layout: string;
@@ -1850,6 +1904,8 @@ interface ChangesViewProps {
   selectionKey: string;
   amend: boolean;
   onAmend: (next: boolean) => void;
+  noVerify: boolean;
+  onNoVerify: (next: boolean) => void;
   canAmend: boolean;
   compact: boolean;
   onBack: () => void;
@@ -1867,6 +1923,7 @@ function ChangesView({
   fileBusy,
   onToggleFile,
   onToggleAll,
+  onDiscard,
   diff,
   diffLoading,
   layout,
@@ -1890,6 +1947,8 @@ function ChangesView({
   selectionKey,
   amend,
   onAmend,
+  noVerify,
+  onNoVerify,
   canAmend,
   compact,
   onBack,
@@ -1909,6 +1968,12 @@ function ChangesView({
   const filteredConflicts = useMemo(() => conflicts.filter(match), [conflicts, needle]);
   const filteredStaged = useMemo(() => staged.filter(match), [staged, needle]);
   const filteredUnstaged = useMemo(() => unstaged.filter(match), [unstaged, needle]);
+
+  const discardEntry =
+    selection === null || selection.side === 'conflict'
+      ? null
+      : ((selection.side === 'staged' ? staged : unstaged).find((entry) => entry.path === selection.path) ??
+        null);
 
   const stagedStats = useMemo(() => {
     let add = 0;
@@ -2175,18 +2240,33 @@ function ChangesView({
         h(
           'div',
           { className: 'gitp-commit-actions' },
-          canAmend
-            ? h(
-                'label',
-                { className: 'gitp-amend' },
-                h('input', {
-                  type: 'checkbox',
-                  checked: amend,
-                  onChange: (event) => onAmend(event.target.checked),
-                }),
-                t('commit.amend'),
-              )
-            : null,
+          h(
+            'div',
+            { className: 'gitp-commit-opts' },
+            canAmend
+              ? h(
+                  'label',
+                  { className: 'gitp-amend' },
+                  h('input', {
+                    type: 'checkbox',
+                    checked: amend,
+                    onChange: (event) => onAmend(event.target.checked),
+                  }),
+                  t('commit.amend'),
+                )
+              : null,
+            h(
+              'label',
+              { className: 'gitp-amend', title: t('commit.noVerifyHint') },
+              h('input', {
+                type: 'checkbox',
+                checked: noVerify,
+                onChange: (event) => onNoVerify(event.target.checked),
+                disabled: commitBusy,
+              }),
+              t('commit.noVerify'),
+            ),
+          ),
           h(
             'div',
             { className: 'gitp-ai-wrap' },
@@ -2271,6 +2351,7 @@ function ChangesView({
             compact,
             onBack,
             onOpen,
+            onDiscard: discardEntry === null ? undefined : () => onDiscard(discardEntry),
           })
         : h(Empty, {
             icon: h(Icon, { path: paths.file, size: 28 }),
@@ -2296,6 +2377,7 @@ interface DiffViewProps {
   compact: boolean;
   onBack?: () => void;
   onOpen?: (diff: DiffPayload) => void;
+  onDiscard?: () => void;
 }
 
 function DiffView({
@@ -2312,6 +2394,7 @@ function DiffView({
   compact,
   onBack,
   onOpen,
+  onDiscard,
 }: DiffViewProps) {
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const [changeNav, setChangeNav] = useState({ index: -1, canPrev: false, canNext: false });
@@ -2535,6 +2618,14 @@ function DiffView({
                 h(Icon, { path: paths.unified, size: 13 }),
               ),
             ),
+        onDiscard !== undefined
+          ? h(IconButton, {
+              label: t('action.discard'),
+              icon: paths.trash,
+              onClick: onDiscard,
+              disabled: busy,
+            })
+          : null,
       ),
     ),
     diff.conflict
@@ -4426,6 +4517,7 @@ function GitPanel({ call, t, useWorkspaces, useSessions, sessionId, useTabInfo, 
   const [mode, setMode] = useState('changes');
   const [message, setMessage] = useState('');
   const [amend, setAmend] = useState(false);
+  const [noVerify, setNoVerify] = useState(false);
   const [selection, setSelection] = useState<FileSelection | null>(null);
   const [diff, setDiff] = useState<DiffPayload | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
@@ -4448,6 +4540,7 @@ function GitPanel({ call, t, useWorkspaces, useSessions, sessionId, useTabInfo, 
     run: () => void;
   } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [stashNotice, setStashNotice] = useState<string | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
   const [repos, setRepos] = useState<RepoInfo[]>([]);
   const [repoRoot, setRepoRoot] = useState<string | null>(null);
@@ -4719,6 +4812,43 @@ function GitPanel({ call, t, useWorkspaces, useSessions, sessionId, useTabInfo, 
     }
   }
 
+  function askDiscard(entry: StatusEntry): void {
+    if (busy !== null) return;
+    setConfirm({
+      title: t(entry.untracked ? 'discard.deleteTitle' : 'discard.title'),
+      body: t(entry.untracked ? 'discard.deleteBody' : 'discard.body', { path: entry.path }),
+      confirmLabel: t(entry.untracked ? 'discard.deleteConfirm' : 'discard.confirm'),
+      danger: true,
+      run: () => void discardChanges(entry),
+    });
+  }
+
+  async function discardChanges(entry: StatusEntry): Promise<void> {
+    if (busy !== null) return;
+    setBusy('discard');
+    setError(null);
+    try {
+      const result = await call('discard', {
+        workspaceId: workspaceId,
+        repo: repoRoot,
+        paths: [entry.path],
+        confirm: true,
+      });
+      applyStatus(result);
+      if (selection?.path === entry.path) {
+        setSelection(null);
+        setDiff(null);
+      }
+      bumpDiff();
+      setToast(t(entry.untracked ? 'discard.deleted' : 'discard.done', { name: splitPath(entry.path).base }));
+    } catch (event) {
+      setError(failureOf(event));
+    } finally {
+      setBusy(null);
+      setConfirm(null);
+    }
+  }
+
   async function blockAction(block: DiffBlock, action: string): Promise<void> {
     if (busy !== null || diff === null) return;
     if (action === 'revert') {
@@ -4791,6 +4921,7 @@ function GitPanel({ call, t, useWorkspaces, useSessions, sessionId, useTabInfo, 
         repo: repoRoot,
         message,
         amend,
+        noVerify,
       });
       applyStatus(result.status);
       setMessage('');
@@ -4859,6 +4990,7 @@ function GitPanel({ call, t, useWorkspaces, useSessions, sessionId, useTabInfo, 
         repo: repoRoot,
         name,
         message: branchMessage,
+        noVerify,
       });
       applyStatus(result.status);
       setMessage('');
@@ -4877,10 +5009,28 @@ function GitPanel({ call, t, useWorkspaces, useSessions, sessionId, useTabInfo, 
     setBusy('sync');
     setSyncing(kind);
     setError(null);
+    setStashNotice(null);
     try {
       const result = await call(kind, { workspaceId: workspaceId, repo: repoRoot });
       applyStatus(result.status);
-      setToast(t(kind === 'fetch' ? 'sync.fetched' : kind === 'pull' ? 'sync.pulled' : 'sync.pushed'));
+      if (kind === 'pull' && result.autoStash === 'conflict') {
+        setMode('changes');
+        setSelection(null);
+        setDiff(null);
+        setStashNotice(t('sync.pulledStashConflict'));
+      } else {
+        setToast(
+          t(
+            kind === 'fetch'
+              ? 'sync.fetched'
+              : kind === 'pull'
+                ? result.autoStash === 'restored'
+                  ? 'sync.pulledStashed'
+                  : 'sync.pulled'
+                : 'sync.pushed',
+          ),
+        );
+      }
     } catch (event) {
       setError(failureOf(event));
     } finally {
@@ -5069,6 +5219,19 @@ function GitPanel({ call, t, useWorkspaces, useSessions, sessionId, useTabInfo, 
           }),
         )
       : null,
+    stashNotice
+      ? h(
+          'div',
+          { className: 'gitp-error', role: 'status' },
+          h(Icon, { path: paths.warning, size: 14 }),
+          h('span', { className: 'gitp-error-text' }, stashNotice),
+          h(IconButton, {
+            label: t('action.close'),
+            icon: paths.close,
+            onClick: () => setStashNotice(null),
+          }),
+        )
+      : null,
     h(
       'div',
       { className: 'gitp-body' },
@@ -5138,6 +5301,7 @@ function GitPanel({ call, t, useWorkspaces, useSessions, sessionId, useTabInfo, 
                     fileBusy: busy !== null,
                     onToggleFile: toggleFile,
                     onToggleAll: toggleAll,
+                    onDiscard: askDiscard,
                     diff,
                     diffLoading,
                     layout: effectiveLayout,
@@ -5164,6 +5328,8 @@ function GitPanel({ call, t, useWorkspaces, useSessions, sessionId, useTabInfo, 
                     selectionKey,
                     amend,
                     onAmend: setAmend,
+                    noVerify,
+                    onNoVerify: setNoVerify,
                     canAmend: snapshot.branch?.initial !== true,
                     compact,
                     onBack: () => setSelection(null),
@@ -5213,8 +5379,10 @@ function GitPanel({ call, t, useWorkspaces, useSessions, sessionId, useTabInfo, 
           defaultName: branchDefault,
           defaultMessage: branchMessageDefault,
           busy: branchBusy,
+          noVerify,
           error: branchError,
           onCreate: createBranch,
+          onNoVerify: setNoVerify,
           onClose: () => {
             setBranchOpen(false);
             setBranchError(null);
@@ -5228,7 +5396,7 @@ function GitPanel({ call, t, useWorkspaces, useSessions, sessionId, useTabInfo, 
           confirmLabel: confirm.confirmLabel,
           cancelLabel: t('action.cancel'),
           danger: confirm.danger,
-          busy: busy === 'block' || branchBusy,
+          busy: busy !== null || branchBusy,
           onConfirm: () => confirm.run(),
           onClose: () => setConfirm(null),
         })

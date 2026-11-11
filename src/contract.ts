@@ -172,6 +172,8 @@ export interface StashEntry {
 export interface OperationResult {
   output: string;
   status: StatusSnapshot;
+  /** Set by pull when local changes were stashed; conflict means the stash was kept. */
+  autoStash?: 'restored' | 'conflict';
 }
 
 /** The result of a commit. */
