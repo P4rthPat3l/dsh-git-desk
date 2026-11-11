@@ -522,6 +522,21 @@ async function realOrSelf(runtime: GitRuntime, target: string): Promise<string> 
 }
 
 /**
+ * Tell whether one path still resolves.
+ * @param runtime the runtime helpers.
+ * @param target the path.
+ * @returns whether the path exists.
+ */
+async function resolves(runtime: GitRuntime, target: string): Promise<boolean> {
+  try {
+    await runtime.realpath(target);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Tell whether one path names a directory or sits inside it.
  * @param parent the directory.
  * @param child the path.
@@ -661,39 +676,58 @@ export async function discoverRepositories(runtime: GitRuntime, workspacePath: s
     }
   }
   await scan(workspace, 1);
-  const roots = [...found.values()].sort((a, b) => {
+  const candidates = [...found.values()].sort((a, b) => {
     const left = path.relative(workspace, a) || '.';
     const right = path.relative(workspace, b) || '.';
     return left === '.' ? -1 : right === '.' ? 1 : left.localeCompare(right);
   });
-  const list: RepoInfo[] = [];
-  for (const repoRoot of roots) {
-    const worktrees = await listWorktrees(runtime, repoRoot);
-    const here = await realOrSelf(runtime, repoRoot);
-    let branch: string | null = null;
-    for (const worktree of worktrees) {
-      if ((await realOrSelf(runtime, worktree.path)) === here) branch = worktree.branch;
+  // The scan finds a worktree that sits in a non-dot folder as its own
+  // repository, and that worktree lists the whole family. Group by common Git
+  // directory so each family is listed once.
+  const families = new Map<string, { primary: RepoInfo; worktrees: RepoInfo[] }>();
+  for (const candidate of candidates) {
+    const dirs = await gitDirs(runtime, candidate);
+    const family = dirs === null ? await realOrSelf(runtime, candidate) : await realOrSelf(runtime, dirs.commonDir);
+    if (families.has(family)) continue;
+    const records: { record: WorktreeRecord; real: string }[] = [];
+    for (const record of await listWorktrees(runtime, candidate)) {
+      records.push({ record, real: await realOrSelf(runtime, record.path) });
     }
-    list.push({
-      root: repoRoot,
-      name: path.relative(workspace, repoRoot) || '.',
-      label: path.basename(repoRoot),
-      worktree: false,
-      branch,
-    });
-    for (const worktree of worktrees) {
-      if (worktree.bare || worktree.prunable) continue;
-      if ((await realOrSelf(runtime, worktree.path)) === here) continue;
-      list.push({
-        root: worktree.path,
-        name: path.relative(workspace, worktree.path) || path.basename(worktree.path),
-        label: path.basename(worktree.path),
+    const inWorkspace = containsPath(workspace, family);
+    // A family whose common Git directory is inside the workspace is one of its
+    // repositories, and its main checkout is the row. Otherwise the candidate is
+    // a worktree of a repository outside, and it stands for itself.
+    const main = records[0];
+    const primaryPath = inWorkspace && main !== undefined ? main.real : await realOrSelf(runtime, candidate);
+    const primaryRecord = records.find((entry) => entry.real === primaryPath);
+    const primary: RepoInfo = {
+      root: primaryPath,
+      name: path.relative(workspace, primaryPath) || '.',
+      label: path.basename(primaryPath),
+      worktree: primaryRecord !== undefined && primaryRecord !== main,
+      branch: primaryRecord?.record.branch ?? null,
+    };
+    const worktrees: RepoInfo[] = [];
+    for (const entry of records) {
+      if (entry.real === primaryPath) continue;
+      if (entry.record.bare || entry.record.prunable) continue;
+      if (!inWorkspace && !containsPath(workspace, entry.real)) continue;
+      // A locked worktree whose folder was deleted is not prunable, and opening
+      // it would fail. Leave it out.
+      if (!(await resolves(runtime, entry.record.path))) continue;
+      worktrees.push({
+        root: entry.record.path,
+        name: path.relative(workspace, entry.record.path) || path.basename(entry.record.path),
+        label: path.basename(entry.record.path),
         worktree: true,
-        branch: worktree.branch,
+        branch: entry.record.branch,
       });
     }
+    families.set(family, { primary, worktrees });
   }
-  return list;
+  return [...families.values()]
+    .sort((a, b) => (a.primary.name === '.' ? -1 : b.primary.name === '.' ? 1 : a.primary.name.localeCompare(b.primary.name)))
+    .flatMap((family) => [family.primary, ...family.worktrees]);
 }
 
 /**
@@ -1728,8 +1762,10 @@ export async function branches(runtime: GitRuntime, root: string): Promise<{ bra
   if (result.code !== 0) throw failure(result, 'Git could not list branches.');
   const here = await realOrSelf(runtime, root);
   const checkedOut = new Map<string, string>();
+  // A prunable or locked worktree still holds its branch: Git refuses the
+  // checkout, so the branch has to stay marked.
   for (const worktree of worktrees) {
-    if (worktree.bare || worktree.prunable || worktree.branch === null) continue;
+    if (worktree.bare || worktree.branch === null) continue;
     if ((await realOrSelf(runtime, worktree.path)) === here) continue;
     checkedOut.set(worktree.branch, worktree.path);
   }
@@ -1769,7 +1805,7 @@ export async function checkout(
   }
   const here = await realOrSelf(runtime, root);
   for (const worktree of await listWorktrees(runtime, root)) {
-    if (worktree.bare || worktree.prunable || worktree.branch !== name) continue;
+    if (worktree.bare || worktree.branch !== name) continue;
     if ((await realOrSelf(runtime, worktree.path)) === here) continue;
     throw new GitError('git/branch-in-worktree', 'That branch is checked out in another worktree.', {
       path: worktree.path,

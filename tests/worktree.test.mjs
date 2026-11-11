@@ -62,6 +62,11 @@ test('AC-074: status follows a Session that works inside a linked worktree', { s
     result.value.entries.map((entry) => entry.path),
     ['in-worktree.txt'],
   );
+
+  const nowhere = await handler('status', { workspaceId: 'ws-1', sessionDir: setup.root }, undefined, PEER);
+  assert.equal(nowhere.ok, true);
+  assert.equal(nowhere.value.sessionRoot, null, 'a directory outside every repository is not a checkout');
+  assert.equal(nowhere.value.worktree, false);
 });
 
 test('AC-075: a commit through the worktree root moves only that branch', { skip }, async (t) => {
@@ -95,28 +100,41 @@ test('AC-075: a commit through the worktree root moves only that branch', { skip
   await assert.rejects(readFile(path.join(setup.workspace, 'b.txt')), (error) => error.code === 'ENOENT');
 });
 
-test('AC-076: the repository list adds linked worktrees and drops a prunable one', { skip }, async (t) => {
+test('AC-076: the repository list adds linked worktrees once and drops a broken one', { skip }, async (t) => {
   const setup = await workspaceWithWorktrees(t);
+  const trees = path.join(setup.workspace, 'trees');
+  await mkdir(trees);
+  const feat = path.join(trees, 'feat');
+  await gitOk(setup.workspace, ['worktree', 'add', '-q', '-b', 'feat', feat], setup.home);
   const doomed = path.join(setup.root, 'doomed');
   await gitOk(setup.workspace, ['worktree', 'add', '-q', '-b', 'doomed', doomed], setup.home);
   await rm(doomed, { recursive: true, force: true });
+  const locked = path.join(setup.root, 'locked');
+  await gitOk(setup.workspace, ['worktree', 'add', '-q', '-b', 'locked', locked], setup.home);
+  await gitOk(setup.workspace, ['worktree', 'lock', locked], setup.home);
+  await rm(locked, { recursive: true, force: true });
 
   const list = await discoverRepositories(setup.runtime, setup.workspace);
 
-  const inside = list.find((item) => item.root === setup.inside);
-  assert.notEqual(inside, undefined, 'the worktree inside the workspace is listed');
-  assert.equal(inside.worktree, true);
-  assert.equal(inside.branch, 'dsh-abc');
-  assert.equal(inside.label, 'dsh-abc');
+  const roots = list.map((item) => item.root);
+  assert.equal(new Set(roots).size, roots.length, 'no checkout is listed twice');
+  assert.equal(list.length, 4, 'the workspace, two worktrees inside, and one outside');
 
+  const byRoot = new Map(list.map((item) => [item.root, item]));
   const main = list[0];
   assert.equal(main.root, await realpath(setup.workspace));
   assert.equal(main.worktree, false);
   assert.equal(main.branch, 'main');
 
-  const outside = list.find((item) => item.root === setup.outside);
-  assert.equal(outside?.worktree, true, 'a worktree outside the folder is still listed');
-  assert.equal(list.some((item) => item.root === doomed), false, 'the deleted worktree is not listed');
+  const inside = byRoot.get(setup.inside);
+  assert.equal(inside?.worktree, true, 'the worktree inside the workspace is listed');
+  assert.equal(inside?.branch, 'dsh-abc');
+  assert.equal(inside?.label, 'dsh-abc');
+  assert.equal(byRoot.get(setup.outside)?.worktree, true, 'a worktree outside the folder is still listed');
+  assert.equal(byRoot.get(feat)?.worktree, true, 'a worktree in a plain folder is listed, and only once');
+  assert.equal(byRoot.get(feat)?.branch, 'feat');
+  assert.equal(byRoot.has(doomed), false, 'the deleted worktree is not listed');
+  assert.equal(byRoot.has(locked), false, 'a locked worktree with no folder is not listed');
 });
 
 test('AC-077: a worktree outside the folder is accepted only when its repository is inside', { skip }, async (t) => {
@@ -152,6 +170,20 @@ test('AC-078: a branch checked out in another worktree is marked and refused', {
     (await gitOk(setup.workspace, ['rev-parse', '--abbrev-ref', 'HEAD'], setup.home)).stdout.trim(),
     'main',
     'the checkout never ran',
+  );
+
+  const doomed = path.join(setup.root, 'doomed');
+  await gitOk(setup.workspace, ['worktree', 'add', '-q', '-b', 'doomed', doomed], setup.home);
+  await rm(doomed, { recursive: true, force: true });
+  const after = await branches(setup.runtime, setup.workspace);
+  assert.equal(
+    after.branches.find((item) => item.name === 'doomed')?.worktree,
+    doomed,
+    'a prunable worktree still holds its branch',
+  );
+  await assert.rejects(
+    () => checkout(setup.runtime, setup.workspace, { branch: 'doomed', remote: false }),
+    (error) => error.code === 'git/branch-in-worktree',
   );
 });
 

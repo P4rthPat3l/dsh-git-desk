@@ -173,6 +173,7 @@ test('AC-003: the tab body renders the panel root', async () => {
 
 const MAIN_DIR = '/ws';
 const WORKTREE_DIR = '/ws/.agents/worktrees/dsh-abc';
+const NESTED_DIR = '/ws/b';
 
 /**
  * Answer a status request the way the host does for one workspace with a
@@ -181,8 +182,10 @@ const WORKTREE_DIR = '/ws/.agents/worktrees/dsh-abc';
  * @returns {object} the snapshot.
  */
 function worktreeStatus(payload) {
-  const worktree = payload.sessionDir === WORKTREE_DIR;
-  const root = worktree ? WORKTREE_DIR : MAIN_DIR;
+  const dir = typeof payload.sessionDir === 'string' ? payload.sessionDir : '';
+  const worktree = dir === WORKTREE_DIR || dir.startsWith(`${WORKTREE_DIR}/`);
+  const nested = dir === NESTED_DIR || dir.startsWith(`${NESTED_DIR}/`);
+  const root = worktree ? WORKTREE_DIR : nested ? NESTED_DIR : MAIN_DIR;
   const snapshot = {
     repo: true,
     root,
@@ -202,25 +205,42 @@ function worktreeStatus(payload) {
   return {
     ...snapshot,
     repos: [
-      { root: MAIN_DIR, name: '.', label: 'ws', worktree: false, branch: 'main', repository: MAIN_DIR },
+      { root: MAIN_DIR, name: '.', label: 'ws', worktree: false, branch: 'main' },
       {
         root: WORKTREE_DIR,
         name: '.agents/worktrees/dsh-abc',
         label: 'dsh-abc',
         worktree: true,
         branch: 'dsh-abc',
-        repository: MAIN_DIR,
       },
+      { root: NESTED_DIR, name: 'b', label: 'b', worktree: false, branch: 'main' },
     ],
   };
 }
 
 /**
- * Render the Git tab body against a stub session store.
- * @param {object} options the initial session row.
- * @returns {Promise<object>} the root, container, calls, store, and re-render.
+ * Wait for one condition, with a deadline so a regression fails instead of
+ * spinning.
+ * @param {() => boolean} check the condition.
+ * @param {string} label what the test waits for.
+ * @returns {Promise<void>} resolves once the condition holds.
  */
-async function renderPanel(options = {}) {
+async function until(check, label) {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    if (check()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.fail(label);
+}
+
+/**
+ * Render the Git tab body against a stub session store. The panel is unmounted
+ * after the test, so a failed assertion cannot leave the status poll running.
+ * @param {object} t the test context.
+ * @param {object} options the initial session row and the stored pick.
+ * @returns {Promise<object>} the dom, root, container, calls, store, and re-render.
+ */
+async function renderPanel(t, options = {}) {
   const { dom, module, ctx, slotRegistrations } = await loadBundle();
   module.apply(ctx);
   const body = slotRegistrations.find(
@@ -233,6 +253,10 @@ async function renderPanel(options = {}) {
   const container = dom.window.document.createElement('div');
   dom.window.document.body.append(container);
   const root = createRoot(container);
+  t.after(() => {
+    root.unmount();
+    dom.window.close();
+  });
   const calls = [];
   const store = { session: options.session ?? { cwd: MAIN_DIR } };
   const call = async (endpoint, payload) => {
@@ -249,14 +273,15 @@ async function renderPanel(options = {}) {
     useWorkspaces: (selector) =>
       selector({ items: [{ workspaceId: 'ws-1', path: MAIN_DIR, sessionIds: ['session-1'] }] }),
   };
+  if (options.stored !== undefined) dom.window.localStorage.setItem('dsh-git.repo.ws-1', options.stored);
   const render = () => root.render(React.createElement(body.component, props));
   render();
   await new Promise((resolve) => setTimeout(resolve, 40));
   return { dom, root, container, calls, store, render };
 }
 
-test('AC-080: the panel sends the Session working directory and opens its worktree', async () => {
-  const panel = await renderPanel({
+test('AC-080: the panel sends the Session working directory and opens its worktree', async (t) => {
+  const panel = await renderPanel(t, {
     session: { cwd: MAIN_DIR, projectionValues: { workingDirectory: WORKTREE_DIR } },
   });
   const statusCalls = panel.calls.filter((entry) => entry.endpoint === 'status');
@@ -266,28 +291,80 @@ test('AC-080: the panel sends the Session working directory and opens its worktr
   const label = panel.container.querySelector('.gitp-worktree');
   assert.notEqual(label, null, 'the Worktree label renders');
   assert.equal(label.textContent, 'repo.worktree');
-  panel.root.unmount();
 });
 
-test('AC-080: the panel falls back to the row cwd when the projection is missing', async () => {
-  const panel = await renderPanel({ session: { cwd: MAIN_DIR } });
+test('AC-080: the panel falls back to the row cwd when the projection is missing', async (t) => {
+  const panel = await renderPanel(t, { session: { cwd: MAIN_DIR } });
   const first = panel.calls.find((entry) => entry.endpoint === 'status');
   assert.equal(first.payload.sessionDir, MAIN_DIR);
   assert.equal(panel.container.querySelector('.gitp-worktree'), null);
-  panel.root.unmount();
 });
 
-test('AC-081: the open panel follows the Session into a worktree', async () => {
-  const panel = await renderPanel({ session: { cwd: MAIN_DIR } });
+test('AC-081: the open panel follows the Session into a worktree', async (t) => {
+  const panel = await renderPanel(t, { session: { cwd: MAIN_DIR } });
   assert.equal(panel.container.querySelector('.gitp-worktree'), null, 'the panel starts on the main checkout');
 
   panel.store.session = { cwd: MAIN_DIR, projectionValues: { workingDirectory: WORKTREE_DIR } };
   panel.render();
-  await new Promise((resolve) => setTimeout(resolve, 40));
-
+  await until(
+    () => panel.container.querySelector('.gitp-worktree') !== null,
+    'the panel switched to the worktree',
+  );
   assert.notEqual(panel.container.querySelector('.gitp-worktree'), null, 'the panel switched to the worktree');
   const repoSends = panel.calls.filter((entry) => entry.endpoint === 'status' && entry.payload.repo === WORKTREE_DIR);
   assert.ok(repoSends.length > 0, 'the panel reads the worktree status');
-  panel.root.unmount();
+});
+
+
+test('AC-079: a stored pick wins, and the Session checkout is the fallback', async (t) => {
+  const stored = await renderPanel(t, {
+    session: { cwd: MAIN_DIR, projectionValues: { workingDirectory: MAIN_DIR } },
+    stored: NESTED_DIR,
+  });
+  const storedSends = stored.calls.filter((entry) => entry.endpoint === 'status' && entry.payload.repo !== undefined);
+  assert.ok(storedSends.length > 0, 'the panel reads a repository');
+  assert.equal(storedSends[0].payload.repo, NESTED_DIR, 'the stored pick is kept');
+
+  const fallback = await renderPanel(t, {
+    session: { cwd: NESTED_DIR, projectionValues: { workingDirectory: NESTED_DIR } },
+  });
+  const fallbackSends = fallback.calls.filter((entry) => entry.endpoint === 'status' && entry.payload.repo !== undefined);
+  assert.equal(fallbackSends[0].payload.repo, NESTED_DIR, 'with no stored pick the Session checkout wins over the first');
+});
+
+test('AC-081: a manual pick survives a move inside the same checkout', async (t) => {
+  const panel = await renderPanel(t, {
+    session: { cwd: MAIN_DIR, projectionValues: { workingDirectory: WORKTREE_DIR } },
+  });
+  assert.notEqual(panel.container.querySelector('.gitp-worktree'), null, 'the panel starts on the worktree');
+  assert.equal(
+    panel.dom.window.localStorage.getItem('dsh-git.repo.ws-1'),
+    null,
+    'a worktree the Session chose is not stored',
+  );
+
+  panel.container.querySelector('.gitp-repo-pick').click();
+  await until(
+    () => panel.container.querySelectorAll('.gitp-popover-row').length > 0,
+    'the picker opens',
+  );
+  const mainRow = [...panel.container.querySelectorAll('.gitp-popover-row')].find((row) => row.title === MAIN_DIR);
+  assert.notEqual(mainRow, undefined, 'the main checkout is in the picker');
+  mainRow.click();
+  await until(
+    () => panel.container.querySelector('.gitp-worktree') === null,
+    'the panel switched to the main checkout',
+  );
+  assert.equal(panel.container.querySelector('.gitp-worktree'), null, 'the panel switched to the main checkout');
+
+  panel.store.session = { cwd: MAIN_DIR, projectionValues: { workingDirectory: `${WORKTREE_DIR}/src` } };
+  panel.render();
+  await new Promise((resolve) => setTimeout(resolve, 40));
+
+  assert.equal(
+    panel.container.querySelector('.gitp-worktree'),
+    null,
+    'a cd inside the same checkout keeps the manual pick',
+  );
 });
 

@@ -3233,7 +3233,7 @@ function RepoMenu({ t, repos, current, onPick, onInitRoot, onClose }: RepoMenuPr
     document.addEventListener('keydown', onKey, true);
     return () => document.removeEventListener('keydown', onKey, true);
   }, []);
-  const canInit = !repos.some((item) => item.name === '.' || item.name.startsWith('..'));
+  const canInit = !repos.some((item) => !item.worktree && (item.name === '.' || item.name.startsWith('..')));
   return h(
     'div',
     {
@@ -4494,11 +4494,26 @@ function sessionDirOf(session: SessionItem | undefined): string | null {
  * @returns the checkout, or null when the workspace holds none.
  */
 function pickRepo(snapshot: StatusSnapshot, repos: RepoInfo[], stored: string): RepoInfo | null {
-  if (snapshot.worktree === true && typeof snapshot.sessionRoot === 'string') {
-    const worktree = repos.find((item) => item.root === snapshot.sessionRoot);
+  const sessionRoot = typeof snapshot.sessionRoot === 'string' ? snapshot.sessionRoot : null;
+  if (snapshot.worktree === true && sessionRoot !== null) {
+    const worktree = repos.find((item) => item.root === sessionRoot);
     if (worktree !== undefined) return worktree;
   }
-  return repos.find((item) => item.root === stored) ?? repos[0] ?? null;
+  const storedPick = repos.find((item) => item.root === stored);
+  if (storedPick !== undefined) return storedPick;
+  const sessionPick = sessionRoot === null ? undefined : repos.find((item) => item.root === sessionRoot);
+  return sessionPick ?? repos[0] ?? null;
+}
+
+/**
+ * Name the checkout a status response reports, so a move inside one checkout
+ * is not mistaken for a move between checkouts.
+ * @param snapshot the status response.
+ * @returns the key.
+ */
+function checkoutKeyOf(snapshot: StatusSnapshot): string {
+  const root = typeof snapshot.sessionRoot === 'string' ? snapshot.sessionRoot : '';
+  return `${snapshot.worktree === true ? 'worktree' : 'checkout'}:${root}`;
 }
 
 interface GitPanelProps {
@@ -4700,10 +4715,14 @@ function GitPanel({ call, t, useWorkspaces, useSessions, sessionId, useTabInfo, 
   );
 
   const prevWsId = useRef<string | null>(null);
+  const appliedCheckout = useRef<string | null>(null);
+  const repoRootNow = useRef<string | null>(null);
+  repoRootNow.current = repoRoot;
   useEffect(() => {
     if (!workspace?.workspaceId) return;
     const wsId = workspaceId;
-    if (prevWsId.current !== wsId) {
+    const wsChanged = prevWsId.current !== wsId;
+    if (wsChanged) {
       prevWsId.current = wsId;
       setRepos([]);
       setRepoRoot(null);
@@ -4716,6 +4735,12 @@ function GitPanel({ call, t, useWorkspaces, useSessions, sessionId, useTabInfo, 
         if (controller.signal.aborted) return;
         const list = Array.isArray(next.repos) ? next.repos : [];
         setRepos(list);
+        // The working directory moves on every cd, so only a different checkout
+        // reopens the pick. Otherwise a manual pick would not survive.
+        const checkoutKey = checkoutKeyOf(next);
+        const moved = appliedCheckout.current !== checkoutKey;
+        appliedCheckout.current = checkoutKey;
+        if (!wsChanged && !moved && repoRootNow.current !== null) return;
         const pick = pickRepo(next, list, readStore(STORE_REPO + wsId, ''));
         if (pick) {
           setRepoRoot(pick.root);
