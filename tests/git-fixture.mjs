@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
-import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -98,6 +98,8 @@ export function runtimeFor(home) {
         return null;
       }
     },
+    readdir: (directory) => readdir(directory, { withFileTypes: true }),
+    realpath: (target) => realpath(target),
   };
 }
 

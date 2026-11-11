@@ -21,6 +21,7 @@ import type {
 } from '../contract.js';
 import type {
   ClientContext,
+  SessionItem,
   SessionState,
   ShortcutCommand,
   SidebarRightService,
@@ -236,6 +237,7 @@ const EN = {
   'repo.initRootTitle': 'Initialize at the workspace root?',
   'repo.initRootBody': 'The workspace contains {count} repositories. A repository at the workspace root treats each of them as an untracked folder. Pick one of the repositories instead.',
   'repo.initRootConfirm': 'Initialize anyway',
+  'repo.worktree': 'Worktree',
   'action.revert': 'Revert block',
   'diff.split': 'Split',
   'diff.unified': 'Unified',
@@ -275,6 +277,7 @@ const EN = {
   'branch.newHint': 'Created from the current HEAD and checked out. No commit is made.',
   'branch.search': 'Search branches',
   'branch.remote': 'Remote branches',
+  'branch.inWorktree': 'Checked out in another worktree',
   'branch.createdOnly': 'Created {branch}',
   'branch.noneMatch': 'No branch matches',
   'stash.title': 'Stash changes',
@@ -484,6 +487,7 @@ const ZH = {
   'repo.initRootTitle': '在根目录初始化？',
   'repo.initRootBody': '工作区包含 {count} 个仓库。在根目录初始化会把它们当成未跟踪目录。请改用仓库选择器。',
   'repo.initRootConfirm': '仍要初始化',
+  'repo.worktree': '工作树',
   'action.revert': '还原区块',
   'diff.split': '并排',
   'diff.unified': '统一',
@@ -523,6 +527,7 @@ const ZH = {
   'branch.newHint': '从当前 HEAD 创建并切换，不产生提交。',
   'branch.search': '搜索分支',
   'branch.remote': '远端分支',
+  'branch.inWorktree': '已在其他工作树检出',
   'branch.createdOnly': '已创建 {branch}',
   'branch.noneMatch': '没有匹配的分支',
   'stash.title': '贮藏更改',
@@ -1370,6 +1375,9 @@ button[data-forge-header]{display:none}
 .gitp-popover-row[aria-selected=true]:disabled{opacity:1;cursor:default}
 .gitp-popover-row .gitp-checkmark{margin-left:auto;color:var(--dsw-alias-label-primary)}
 .gitp-popover-row-text{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gitp-popover-row.is-nested{padding-left:26px}
+.gitp-popover-hint{flex:none;max-width:140px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gitp-worktree{flex:none;padding:1px 6px;border-radius:var(--dsw-radius-sm,8px);background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;white-space:nowrap}
 .gitp-popover .gitp-modal-sub{padding:6px 8px;margin:0;color:var(--dsw-alias-label-tertiary)}
 .gitp-center{display:flex;flex:1;flex-direction:column;align-items:center;justify-content:center;gap:4px;padding:32px 24px;text-align:center;color:var(--dsw-alias-label-tertiary)}
 .gitp-center-title{font-size:14px;line-height:22px;font-weight:500;color:var(--dsw-alias-label-primary)}
@@ -3087,6 +3095,7 @@ function Header({
       : currentRepo.name === '.'
         ? t('repo.workspace')
         : currentRepo.label ?? currentRepo.name;
+  const worktree = currentRepo?.worktree === true;
   return h(
     'div',
     { className: 'gitp-head' },
@@ -3125,6 +3134,9 @@ function Header({
         h('span', { className: 'gitp-branch-name' }, branchName),
         h('span', { className: 'gitp-chevron' }, h(Icon, { path: paths.chevron, size: 11 })),
       ),
+      worktree
+        ? h('span', { className: 'gitp-worktree', title: repoRoot ?? undefined }, t('repo.worktree'))
+        : null,
     ),
     h(
       'div',
@@ -3243,14 +3255,22 @@ function RepoMenu({ t, repos, current, onPick, onInitRoot, onClose }: RepoMenuPr
             {
               type: 'button',
               key: item.root,
-              className: 'gitp-popover-row',
+              className: cx('gitp-popover-row', item.worktree && 'is-nested'),
               role: 'option',
               'aria-selected': item.root === current,
               disabled: item.root === current,
+              title: item.root,
               onClick: () => onPick(item.root),
             },
-            h(Icon, { path: paths.folder, size: 13 }),
-            h('span', { className: 'gitp-popover-row-text' }, item.name === '.' ? t('repo.workspace') : item.label ?? item.name),
+            h(Icon, { path: item.worktree ? paths.branch : paths.folder, size: 13 }),
+            h(
+              'span',
+              { className: 'gitp-popover-row-text' },
+              item.name === '.' ? t('repo.workspace') : item.label ?? item.name,
+            ),
+            item.worktree && item.branch !== null
+              ? h('span', { className: 'gitp-popover-hint' }, item.branch)
+              : null,
             item.root === current ? h(Icon, { path: paths.check, size: 13, className: 'gitp-checkmark' }) : null,
           ),
         ),
@@ -3310,8 +3330,9 @@ function BranchMenu({ t, branches, loading, busy, onCheckout, onNew, onClose }: 
   const filteredLocal = local.filter(match);
   const filteredRemote = remotes.filter(match);
   const rows = (items: BranchInfo[], remote: boolean): React.ReactNode[] =>
-    items.map((item) =>
-      h(
+    items.map((item) => {
+      const elsewhere = item.worktree !== null;
+      return h(
         'button',
         {
           type: 'button',
@@ -3319,14 +3340,16 @@ function BranchMenu({ t, branches, loading, busy, onCheckout, onNew, onClose }: 
           className: 'gitp-popover-row',
           role: 'option',
           'aria-selected': item.current === true,
-          disabled: busy || item.current === true,
+          disabled: busy || item.current === true || elsewhere,
+          title: elsewhere ? `${t('branch.inWorktree')}: ${item.worktree ?? ''}` : undefined,
           onClick: () => onCheckout(item.name, remote),
         },
         h(Icon, { path: paths.branch, size: 13 }),
         h('span', { className: 'gitp-popover-row-text' }, item.name),
+        elsewhere ? h('span', { className: 'gitp-popover-hint' }, item.worktree ?? '') : null,
         item.current ? h(Icon, { path: paths.check, size: 13, className: 'gitp-checkmark' }) : null,
-      ),
-    );
+      );
+    });
   return h(
     'div',
     {
@@ -4449,6 +4472,35 @@ function StashView({ call, workspaceId, repo, t, snapshot, onStatus, refreshToke
   );
 }
 
+/**
+ * Read the directory a Session works in now.
+ * @param session the Session row.
+ * @returns the working directory, or null when the row carries none.
+ */
+function sessionDirOf(session: SessionItem | undefined): string | null {
+  const projected = session?.projectionValues?.workingDirectory;
+  if (typeof projected === 'string' && projected.trim() !== '') return projected.trim();
+  const cwd = session?.cwd;
+  return typeof cwd === 'string' && cwd !== '' ? cwd : null;
+}
+
+/**
+ * Choose the checkout the panel opens. A Session that works in a linked
+ * worktree opens that worktree. Otherwise the stored pick wins, then the
+ * workspace repository.
+ * @param snapshot the status response carrying the checkout facts.
+ * @param repos the discovered checkouts.
+ * @param stored the stored pick for this workspace.
+ * @returns the checkout, or null when the workspace holds none.
+ */
+function pickRepo(snapshot: StatusSnapshot, repos: RepoInfo[], stored: string): RepoInfo | null {
+  if (snapshot.worktree === true && typeof snapshot.sessionRoot === 'string') {
+    const worktree = repos.find((item) => item.root === snapshot.sessionRoot);
+    if (worktree !== undefined) return worktree;
+  }
+  return repos.find((item) => item.root === stored) ?? repos[0] ?? null;
+}
+
 interface GitPanelProps {
   call: Call;
   t: Translator;
@@ -4498,6 +4550,7 @@ function GitPanel({ call, t, useWorkspaces, useSessions, sessionId, useTabInfo, 
 
   const workspaces = useWorkspaces((state) => state.items);
   const session = useSessions((state) => state.byId[sessionId]);
+  const sessionDir = sessionDirOf(session);
   const workspace =
     workspaces.find((item) => item.sessionIds?.includes(sessionId)) ??
     workspaces.find(
@@ -4593,7 +4646,7 @@ function GitPanel({ call, t, useWorkspaces, useSessions, sessionId, useTabInfo, 
       try {
         const next = await call(
           'status',
-          { workspaceId: workspaceId, repo: repoRoot },
+          { workspaceId: workspaceId, repo: repoRoot, sessionDir },
           signal,
         );
         if (current === epoch.current) {
@@ -4624,7 +4677,7 @@ function GitPanel({ call, t, useWorkspaces, useSessions, sessionId, useTabInfo, 
         if (current === epoch.current) setStatusLoading(false);
       }
     },
-    [workspace?.workspaceId, repoRoot, call],
+    [workspace?.workspaceId, repoRoot, call, sessionDir],
   );
 
   const onLogApplied = useCallback(
@@ -4659,15 +4712,18 @@ function GitPanel({ call, t, useWorkspaces, useSessions, sessionId, useTabInfo, 
     const controller = new AbortController();
     (async () => {
       try {
-        const next = await call('status', { workspaceId: wsId }, controller.signal);
+        const next = await call('status', { workspaceId: wsId, sessionDir }, controller.signal);
         if (controller.signal.aborted) return;
         const list = Array.isArray(next.repos) ? next.repos : [];
         setRepos(list);
-        const stored = readStore(STORE_REPO + wsId, '');
-        const pick = list.find((item) => item.root === stored) ?? list[0] ?? null;
+        const pick = pickRepo(next, list, readStore(STORE_REPO + wsId, ''));
         if (pick) {
           setRepoRoot(pick.root);
-          writeStore(STORE_REPO + wsId, pick.root);
+          // A worktree the Session chose is never stored: it stops being the
+          // right checkout as soon as the Session leaves it.
+          if (next.worktree !== true || pick.root !== next.sessionRoot) {
+            writeStore(STORE_REPO + wsId, pick.root);
+          }
         } else {
           setSnapshot(next);
         }
@@ -4677,7 +4733,7 @@ function GitPanel({ call, t, useWorkspaces, useSessions, sessionId, useTabInfo, 
       }
     })();
     return () => controller.abort();
-  }, [workspace?.workspaceId, call, repoNonce]);
+  }, [workspace?.workspaceId, call, repoNonce, sessionDir]);
 
   useEffect(() => {
     if (repoRoot === null) return;

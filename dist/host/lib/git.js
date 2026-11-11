@@ -324,6 +324,126 @@ export async function findRepository(runtime, directory) {
     return root === '' ? null : root;
 }
 /**
+ * Read the absolute Git directory and common Git directory of a checkout.
+ * @param runtime the runtime helpers.
+ * @param root the checkout root.
+ * @returns the directories, or null when Git cannot report them.
+ */
+async function gitDirs(runtime, root) {
+    const result = await runtime.run(root, ['rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir']);
+    if (result.code !== 0)
+        return null;
+    const lines = result.stdout
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line !== '');
+    const gitDir = lines[0];
+    const commonDir = lines[1];
+    if (gitDir === undefined || commonDir === undefined)
+        return null;
+    return { gitDir, commonDir };
+}
+/**
+ * Resolve one path, falling back to the input when it is gone.
+ * @param runtime the runtime helpers.
+ * @param target the path.
+ * @returns the resolved path.
+ */
+async function realOrSelf(runtime, target) {
+    try {
+        return await runtime.realpath(target);
+    }
+    catch {
+        return target;
+    }
+}
+/**
+ * Tell whether one path names a directory or sits inside it.
+ * @param parent the directory.
+ * @param child the path.
+ * @returns whether the child is the directory or is inside it.
+ */
+function containsPath(parent, child) {
+    return child === parent || child.startsWith(`${parent}${path.sep}`);
+}
+/**
+ * Parse one `git worktree list --porcelain -z` record.
+ * @param fields the record fields.
+ * @returns the worktree.
+ */
+function parseWorktree(fields) {
+    const record = { path: '', branch: null, prunable: false, bare: false };
+    for (const field of fields) {
+        if (field.startsWith('worktree '))
+            record.path = field.slice('worktree '.length);
+        else if (field.startsWith('branch '))
+            record.branch = field.slice('branch '.length).replace(/^refs\/heads\//, '');
+        else if (field === 'bare')
+            record.bare = true;
+        else if (field.startsWith('prunable'))
+            record.prunable = true;
+    }
+    return record;
+}
+/**
+ * List every checkout of one repository, main first.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @returns the worktrees, empty when Git cannot report them.
+ */
+async function listWorktrees(runtime, root) {
+    const result = await runtime.run(root, ['worktree', 'list', '--porcelain', '-z']);
+    if (result.code !== 0)
+        return [];
+    const list = [];
+    let fields = [];
+    for (const field of result.stdout.split('\x00')) {
+        if (field !== '') {
+            fields.push(field);
+            continue;
+        }
+        if (fields.length > 0)
+            list.push(parseWorktree(fields));
+        fields = [];
+    }
+    if (fields.length > 0)
+        list.push(parseWorktree(fields));
+    return list;
+}
+/**
+ * Tell whether a checkout is a linked worktree. A linked worktree keeps its
+ * own Git directory inside the common one.
+ * @param runtime the runtime helpers.
+ * @param root the checkout root.
+ * @returns whether it is a linked worktree.
+ */
+async function isLinkedWorktree(runtime, root) {
+    const dirs = await gitDirs(runtime, root);
+    if (dirs === null)
+        return false;
+    return (await realOrSelf(runtime, dirs.gitDir)) !== (await realOrSelf(runtime, dirs.commonDir));
+}
+/**
+ * Tell whether a checkout belongs to one workspace. A linked worktree can sit
+ * outside the workspace folder while its common Git directory stays inside it.
+ * @param runtime the runtime helpers.
+ * @param workspacePath the workspace root.
+ * @param root the checkout root.
+ * @returns whether the checkout belongs to the workspace.
+ */
+async function checkoutInWorkspace(runtime, workspacePath, root) {
+    const workspace = await realOrSelf(runtime, workspacePath);
+    const target = await realOrSelf(runtime, root);
+    if (containsPath(workspace, target))
+        return true;
+    if ((await findRepository(runtime, workspace)) === target)
+        return true;
+    const dirs = await gitDirs(runtime, target);
+    if (dirs === null)
+        return false;
+    return containsPath(workspace, await realOrSelf(runtime, dirs.commonDir));
+}
+/**
  * Initialize a repository in one directory.
  * @param runtime the runtime helpers.
  * @param directory the directory.
@@ -351,20 +471,15 @@ async function isRepoRoot(runtime, directory) {
     return (await runtime.lstatPath(path.join(directory, '.git'))) !== null;
 }
 /**
- * List the repositories inside one workspace.
+ * List the checkouts inside one workspace, each repository followed by its
+ * linked worktrees.
  * @param runtime the runtime helpers.
  * @param workspacePath the workspace root.
- * @returns the repositories, workspace first.
+ * @returns the checkouts, workspace repository first.
  */
 export async function discoverRepositories(runtime, workspacePath) {
     const found = new Map();
-    let workspace = workspacePath;
-    try {
-        workspace = await runtime.realpath(workspacePath);
-    }
-    catch {
-        workspace = workspacePath;
-    }
+    const workspace = await realOrSelf(runtime, workspacePath);
     const root = await findRepository(runtime, workspace);
     if (root !== null)
         found.set(root, root);
@@ -389,13 +504,42 @@ export async function discoverRepositories(runtime, workspacePath) {
         }
     }
     await scan(workspace, 1);
-    return [...found.values()]
-        .map((repoRoot) => ({
-        root: repoRoot,
-        name: path.relative(workspace, repoRoot) || '.',
-        label: path.basename(repoRoot),
-    }))
-        .sort((a, b) => (a.name === '.' ? -1 : b.name === '.' ? 1 : a.name.localeCompare(b.name)));
+    const roots = [...found.values()].sort((a, b) => {
+        const left = path.relative(workspace, a) || '.';
+        const right = path.relative(workspace, b) || '.';
+        return left === '.' ? -1 : right === '.' ? 1 : left.localeCompare(right);
+    });
+    const list = [];
+    for (const repoRoot of roots) {
+        const worktrees = await listWorktrees(runtime, repoRoot);
+        const here = await realOrSelf(runtime, repoRoot);
+        let branch = null;
+        for (const worktree of worktrees) {
+            if ((await realOrSelf(runtime, worktree.path)) === here)
+                branch = worktree.branch;
+        }
+        list.push({
+            root: repoRoot,
+            name: path.relative(workspace, repoRoot) || '.',
+            label: path.basename(repoRoot),
+            worktree: false,
+            branch,
+        });
+        for (const worktree of worktrees) {
+            if (worktree.bare || worktree.prunable)
+                continue;
+            if ((await realOrSelf(runtime, worktree.path)) === here)
+                continue;
+            list.push({
+                root: worktree.path,
+                name: path.relative(workspace, worktree.path) || path.basename(worktree.path),
+                label: path.basename(worktree.path),
+                worktree: true,
+                branch: worktree.branch,
+            });
+        }
+    }
+    return list;
 }
 /**
  * Resolve a requested repository inside one workspace.
@@ -411,13 +555,6 @@ export async function resolveRepository(runtime, workspacePath, requested) {
     if (!path.isAbsolute(requested.trim())) {
         throw new GitError('git/repo-invalid', 'Choose the repository root.');
     }
-    let workspace;
-    try {
-        workspace = await runtime.realpath(workspacePath);
-    }
-    catch {
-        workspace = workspacePath;
-    }
     let target;
     try {
         target = await runtime.realpath(requested.trim());
@@ -430,14 +567,28 @@ export async function resolveRepository(runtime, workspacePath, requested) {
         throw new GitError('git/not-repo', 'That folder is not a Git repository.');
     if (root !== target)
         throw new GitError('git/repo-invalid', 'Choose the repository root.');
-    const inside = target === workspace || target.startsWith(`${workspace}${path.sep}`);
-    if (!inside) {
-        const workspaceRepo = await findRepository(runtime, workspace);
-        if (workspaceRepo !== target) {
-            throw new GitError('git/repo-invalid', 'That repository is outside this workspace.');
-        }
+    if (!(await checkoutInWorkspace(runtime, workspacePath, target))) {
+        throw new GitError('git/repo-invalid', 'That repository is outside this workspace.');
     }
     return root;
+}
+/**
+ * Resolve the checkout a Session works in.
+ * @param runtime the runtime helpers.
+ * @param workspacePath the workspace root.
+ * @param sessionDir the Session's working directory, or null.
+ * @returns the checkout root and whether it is a linked worktree.
+ */
+export async function sessionCheckout(runtime, workspacePath, sessionDir) {
+    const directory = sessionDir === null ? '' : sessionDir.trim();
+    if (directory === '')
+        return { root: null, worktree: false };
+    const root = await findRepository(runtime, directory);
+    if (root === null)
+        return { root: null, worktree: false };
+    if (!(await checkoutInWorkspace(runtime, workspacePath, root)))
+        return { root: null, worktree: false };
+    return { root, worktree: await isLinkedWorktree(runtime, root) };
 }
 /**
  * Read the repository status.
@@ -1316,14 +1467,26 @@ export async function resetToCommit(runtime, root, options) {
  * @returns the branches.
  */
 export async function branches(runtime, root) {
-    const result = await runtime.run(root, [
-        'for-each-ref',
-        '--format=%(refname:short)%00%(HEAD)%00%(upstream:short)%00%(refname)',
-        'refs/heads',
-        'refs/remotes',
+    const [result, worktrees] = await Promise.all([
+        runtime.run(root, [
+            'for-each-ref',
+            '--format=%(refname:short)%00%(HEAD)%00%(upstream:short)%00%(refname)',
+            'refs/heads',
+            'refs/remotes',
+        ]),
+        listWorktrees(runtime, root),
     ]);
     if (result.code !== 0)
         throw failure(result, 'Git could not list branches.');
+    const here = await realOrSelf(runtime, root);
+    const checkedOut = new Map();
+    for (const worktree of worktrees) {
+        if (worktree.bare || worktree.prunable || worktree.branch === null)
+            continue;
+        if ((await realOrSelf(runtime, worktree.path)) === here)
+            continue;
+        checkedOut.set(worktree.branch, worktree.path);
+    }
     const list = [];
     for (const record of result.stdout.split('\n')) {
         if (record.trim() === '')
@@ -1339,6 +1502,7 @@ export async function branches(runtime, root) {
             current: head === '*',
             upstream: upstream !== undefined && upstream !== '' ? upstream : null,
             remote,
+            worktree: remote ? null : checkedOut.get(name) ?? null,
         });
     }
     return { branches: list };
@@ -1354,6 +1518,16 @@ export async function checkout(runtime, root, options) {
     const name = typeof options.branch === 'string' ? options.branch.trim() : '';
     if (name === '' || name.startsWith('-') || name.includes('\0')) {
         throw new GitError('git/branch-invalid', 'Choose a branch.');
+    }
+    const here = await realOrSelf(runtime, root);
+    for (const worktree of await listWorktrees(runtime, root)) {
+        if (worktree.bare || worktree.prunable || worktree.branch !== name)
+            continue;
+        if ((await realOrSelf(runtime, worktree.path)) === here)
+            continue;
+        throw new GitError('git/branch-in-worktree', 'That branch is checked out in another worktree.', {
+            path: worktree.path,
+        });
     }
     const result = await runtime.run(root, options.remote === true ? ['checkout', '--track', name] : ['checkout', name]);
     if (result.code !== 0) {

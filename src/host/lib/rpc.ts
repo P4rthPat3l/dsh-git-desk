@@ -25,6 +25,7 @@ import {
   resolveConflict,
   resolveRepository,
   revertCommit,
+  sessionCheckout,
   stagePaths,
   stagedPatch,
   stashApply,
@@ -152,6 +153,21 @@ function workspaceInfo(workspace: WorkspaceRecord): WorkspaceInfo {
 }
 
 /**
+ * Read the checkout a Session works in from one status request.
+ * @param runtime the runtime helpers.
+ * @param workspace the workspace.
+ * @param payload the client payload.
+ * @returns the checkout root and whether it is a linked worktree.
+ */
+function checkoutOf(
+  runtime: GitRuntime,
+  workspace: WorkspaceRecord,
+  payload: unknown,
+): Promise<{ root: string | null; worktree: boolean }> {
+  return sessionCheckout(runtime, workspace.path, optionalString(payload, 'sessionDir') ?? null);
+}
+
+/**
  * Read the status for one workspace, including the repository list.
  * @param runtime the runtime helpers.
  * @param workspace the workspace.
@@ -163,17 +179,21 @@ async function statusFor(
   workspace: WorkspaceRecord,
   payload: unknown,
 ): Promise<StatusSnapshot> {
+  const session = await checkoutOf(runtime, workspace, payload);
+  const sessionRoot = session.root;
+  const worktree = session.worktree;
   const requested = valueOf(payload, 'repo');
   if (typeof requested === 'string' && requested !== '') {
     const root = await resolveRepository(runtime, workspace.path, requested);
     const snapshot = await status(runtime, root);
-    return { ...snapshot, selected: root, workspace: workspaceInfo(workspace) };
+    return { ...snapshot, sessionRoot, worktree, selected: root, workspace: workspaceInfo(workspace) };
   }
   const repos: RepoInfo[] = await discoverRepositories(runtime, workspace.path);
   const workspaceRepo = await findRepository(runtime, workspace.path);
-  if (workspaceRepo !== null) {
-    const snapshot = await status(runtime, workspaceRepo);
-    return { ...snapshot, repos, selected: workspaceRepo, workspace: workspaceInfo(workspace) };
+  const target = worktree && sessionRoot !== null ? sessionRoot : workspaceRepo;
+  if (target !== null) {
+    const snapshot = await status(runtime, target);
+    return { ...snapshot, repos, sessionRoot, worktree, selected: target, workspace: workspaceInfo(workspace) };
   }
   return {
     repo: false,
@@ -194,6 +214,8 @@ async function statusFor(
     cherryPicking: false,
     conflicts: [],
     repos,
+    sessionRoot,
+    worktree,
     selected: null,
     workspace: workspaceInfo(workspace),
   };

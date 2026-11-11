@@ -41,11 +41,15 @@ export interface StatusEntry extends ParsedEntry {
   binary: boolean;
 }
 
-/** One repository as the panel lists it. */
+/** One checkout as the panel lists it. */
 export interface RepoInfo {
   root: string;
   name: string;
   label: string;
+  /** True when the checkout is a linked worktree of `repository`. */
+  worktree: boolean;
+  /** The branch Git reports for this checkout, or null when detached. */
+  branch: string | null;
 }
 
 /** One workspace, as the panel names it. */
@@ -69,6 +73,10 @@ export interface StatusSnapshot {
   repos?: RepoInfo[];
   selected?: string | null;
   workspace?: WorkspaceInfo;
+  /** The checkout that holds the Session's working directory. */
+  sessionRoot?: string | null;
+  /** True when `sessionRoot` is a linked worktree. */
+  worktree?: boolean;
 }
 
 /** The row kind in a side-by-side diff. */
@@ -159,6 +167,8 @@ export interface BranchInfo {
   current: boolean;
   upstream: string | null;
   remote: boolean;
+  /** The path of the worktree that has this branch checked out, when it is not this one. */
+  worktree: string | null;
 }
 
 /** One stash entry. */

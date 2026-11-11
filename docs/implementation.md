@@ -30,7 +30,7 @@ The package name is `dsh-git-desk`. The source folder stays `dsh-git`. The bundl
 | `scripts/build.mjs` | esbuild bundle and loader wrapper |
 | `tests/host.test.mjs`, `tests/client.test.mjs` | Host entry and route, bundle registration and first render |
 | `locale/en.json`, `locale/zh.json` | Plugin Manager title and description |
-| `icon.svg` | Plugin Manager icon |
+| `icon.png` | Plugin Manager icon, approved periwinkle artwork at 512 × 512 pixels, below DSH's 256 KiB limit |
 
 ## Placement
 

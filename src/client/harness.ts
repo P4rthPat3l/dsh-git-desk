@@ -137,6 +137,10 @@ export interface WorkspaceItem {
 /** One session. */
 export interface SessionItem {
   cwd?: string;
+  /** Projections the harness publishes per session; `workingDirectory` follows the Session. */
+  projectionValues?: {
+    workingDirectory?: string | null;
+  };
 }
 
 export interface WorkspaceState {

@@ -170,3 +170,124 @@ test('AC-003: the tab body renders the panel root', async () => {
   assert.notEqual(container.querySelector('.gitp-root'), null, 'the panel root renders');
   root.unmount();
 });
+
+const MAIN_DIR = '/ws';
+const WORKTREE_DIR = '/ws/.agents/worktrees/dsh-abc';
+
+/**
+ * Answer a status request the way the host does for one workspace with a
+ * worktree that follows the Session.
+ * @param {object} payload the request payload.
+ * @returns {object} the snapshot.
+ */
+function worktreeStatus(payload) {
+  const worktree = payload.sessionDir === WORKTREE_DIR;
+  const root = worktree ? WORKTREE_DIR : MAIN_DIR;
+  const snapshot = {
+    repo: true,
+    root,
+    branch: { oid: 'abc1234', name: worktree ? 'dsh-abc' : 'main', upstream: null, ahead: 0, behind: 0, detached: false, initial: false },
+    entries: [],
+    merging: false,
+    rebasing: false,
+    reverting: false,
+    cherryPicking: false,
+    conflicts: [],
+    sessionRoot: root,
+    worktree,
+    selected: root,
+    workspace: { id: 'ws-1', title: 'Project', path: MAIN_DIR },
+  };
+  if (payload.repo !== undefined) return snapshot;
+  return {
+    ...snapshot,
+    repos: [
+      { root: MAIN_DIR, name: '.', label: 'ws', worktree: false, branch: 'main', repository: MAIN_DIR },
+      {
+        root: WORKTREE_DIR,
+        name: '.agents/worktrees/dsh-abc',
+        label: 'dsh-abc',
+        worktree: true,
+        branch: 'dsh-abc',
+        repository: MAIN_DIR,
+      },
+    ],
+  };
+}
+
+/**
+ * Render the Git tab body against a stub session store.
+ * @param {object} options the initial session row.
+ * @returns {Promise<object>} the root, container, calls, store, and re-render.
+ */
+async function renderPanel(options = {}) {
+  const { dom, module, ctx, slotRegistrations } = await loadBundle();
+  module.apply(ctx);
+  const body = slotRegistrations.find(
+    (entry) => entry.spec.name === 'sidebar.right.pane.tab' && entry.spec.key === 'dsh-git',
+  );
+  assert.notEqual(body, undefined);
+
+  const React = nodeRequire('react');
+  const { createRoot } = nodeRequire('react-dom/client');
+  const container = dom.window.document.createElement('div');
+  dom.window.document.body.append(container);
+  const root = createRoot(container);
+  const calls = [];
+  const store = { session: options.session ?? { cwd: MAIN_DIR } };
+  const call = async (endpoint, payload) => {
+    calls.push({ endpoint, payload });
+    return endpoint === 'status' ? worktreeStatus(payload) : {};
+  };
+  const props = {
+    call,
+    t: (key) => key,
+    sessionId: 'session-1',
+    sidebarRight: ctx.sidebarRight,
+    useTabInfo: () => ({ tab: { id: 'dsh-git', visible: true }, panel: { id: 'pane-1' } }),
+    useSessions: (selector) => selector({ byId: { 'session-1': store.session } }),
+    useWorkspaces: (selector) =>
+      selector({ items: [{ workspaceId: 'ws-1', path: MAIN_DIR, sessionIds: ['session-1'] }] }),
+  };
+  const render = () => root.render(React.createElement(body.component, props));
+  render();
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  return { dom, root, container, calls, store, render };
+}
+
+test('AC-080: the panel sends the Session working directory and opens its worktree', async () => {
+  const panel = await renderPanel({
+    session: { cwd: MAIN_DIR, projectionValues: { workingDirectory: WORKTREE_DIR } },
+  });
+  const statusCalls = panel.calls.filter((entry) => entry.endpoint === 'status');
+  assert.ok(statusCalls.length > 0, 'the panel asks for the status');
+  assert.equal(statusCalls[0].payload.sessionDir, WORKTREE_DIR);
+
+  const label = panel.container.querySelector('.gitp-worktree');
+  assert.notEqual(label, null, 'the Worktree label renders');
+  assert.equal(label.textContent, 'repo.worktree');
+  panel.root.unmount();
+});
+
+test('AC-080: the panel falls back to the row cwd when the projection is missing', async () => {
+  const panel = await renderPanel({ session: { cwd: MAIN_DIR } });
+  const first = panel.calls.find((entry) => entry.endpoint === 'status');
+  assert.equal(first.payload.sessionDir, MAIN_DIR);
+  assert.equal(panel.container.querySelector('.gitp-worktree'), null);
+  panel.root.unmount();
+});
+
+test('AC-081: the open panel follows the Session into a worktree', async () => {
+  const panel = await renderPanel({ session: { cwd: MAIN_DIR } });
+  assert.equal(panel.container.querySelector('.gitp-worktree'), null, 'the panel starts on the main checkout');
+
+  panel.store.session = { cwd: MAIN_DIR, projectionValues: { workingDirectory: WORKTREE_DIR } };
+  panel.render();
+  await new Promise((resolve) => setTimeout(resolve, 40));
+
+  assert.notEqual(panel.container.querySelector('.gitp-worktree'), null, 'the panel switched to the worktree');
+  const repoSends = panel.calls.filter((entry) => entry.endpoint === 'status' && entry.payload.repo === WORKTREE_DIR);
+  assert.ok(repoSends.length > 0, 'the panel reads the worktree status');
+  panel.root.unmount();
+});
+

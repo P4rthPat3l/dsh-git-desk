@@ -6,7 +6,7 @@ implementation_status: shipped_unverified
 version: 0.18.0
 owners: [Parth Patel]
 created: 2026-11-09
-last_updated: 2026-11-11
+last_updated: 2026-11-12
 last_verified_commit: none
 ---
 
@@ -237,7 +237,7 @@ Every command runs with `LC_ALL=C`, `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS
 | `dsh-git/src/host/lib/http.ts` | Implemented | Authenticated JSON envelope |
 | `dsh-git/client.js` | Implemented | Right-tab body and title, session header button, repository picker, session auto-open, branch menu and new-branch dialog, Start-guide card, compact and wide layouts, split and unified diff, dialogs, locales, styles |
 | `dsh-git/locale/en.json`, `dsh-git/locale/zh.json` | Implemented | Plugin Manager metadata |
-| `dsh-git/icon.svg` | Implemented | Plugin icon |
+| `dsh-git/icon.png` | Implemented | Plugin Manager icon, approved periwinkle window and branch artwork, 512 × 512 PNG below 256 KiB |
 | `dsh-git/docs/implementation.md` | Implemented | Architecture, endpoints, verification, limits |
 
 ## 12. Business rules
@@ -421,6 +421,54 @@ The plan below was the build order. Phases 1 to 3 and the conflict basics are im
 
 Each phase is usable on its own. Phase 2 alone replaces the read-only part of the IDE trip.
 
+### Following the Session's worktree
+
+**Current behavior.** The panel opens the checkout the Session works in. In a Session started with New worktree, or after the agent calls `create_worktree`, that checkout is `.agents/worktrees/dsh-…` rather than the main checkout, and every status, stage, commit, pull, and push lands there.
+
+How it works:
+
+- The client sends `sessionDir` with `status`, read from the `workingDirectory` Session projection and falling back to the row `cwd` ([`harness.ts`](../../src/client/harness.ts) `SessionItem`).
+- The host resolves the checkout that contains `sessionDir` (`sessionCheckout` in [`git.ts`](../../src/host/lib/git.ts)) and returns `sessionRoot`, with `worktree: true` when it is a linked worktree. A linked worktree is a checkout whose Git directory differs from its common Git directory.
+- When the Session is in a linked worktree, `status` reads that worktree and returns it as `selected`.
+- The client picks the Session's worktree over the stored repository pick, on load and whenever `sessionDir` changes (`pickRepo` in [`main.ts`](../../src/client/main.ts)). A manual pick lasts until the next change of directory. A worktree the Session chose is never stored, because it stops being the right checkout when the Session leaves it.
+- The repository list adds each repository's linked worktrees from `git worktree list --porcelain -z` with their branch, and leaves out the entries Git marks prunable. Each repository is listed first and its worktrees follow it, which is what the picker nests on, so `RepoInfo` needs no separate owner field.
+- `resolveRepository` accepts a checkout outside the workspace folder when its common Git directory is inside the workspace, which is what a worktree of a workspace repository looks like. Any other outside checkout is still refused with `git/repo-invalid`.
+- The header shows a Worktree label with the full path in its tooltip.
+- `branches` reports `worktree`, the path of the worktree that has a branch checked out. The branch menu shows that path and disables the row, and `checkout` refuses with `git/branch-in-worktree` before running Git. Git refuses the same checkout anyway: `fatal: 'name' is already used by worktree at '<path>'`.
+
+Out of scope: creating, removing, or pruning worktrees from the panel. DSH creates them, and `git worktree remove` deletes a checkout.
+
+**Contract.**
+
+| Shape | Change |
+| --- | --- |
+| `status` payload | optional `sessionDir: string` |
+| `StatusSnapshot` | optional `sessionRoot: string \| null` and optional `worktree: boolean` |
+| `RepoInfo` | `worktree: boolean`, `branch: string \| null` |
+| `BranchInfo` | `worktree: string \| null` |
+
+The two snapshot fields are optional because only a `status` response knows them. Every other endpoint returns the status it reads, and the client takes the checkout facts from `status`.
+
+**Acceptance criteria.** All met.
+
+| ID | Criterion | Test |
+| --- | --- | --- |
+| AC-074 | With `sessionDir` inside a linked worktree, `status` returns that worktree as `sessionRoot` with `worktree: true`, and its branch and entries come from the worktree. | host, [`worktree.test.mjs`](../../tests/worktree.test.mjs) |
+| AC-075 | A commit through the worktree root moves only the worktree's branch. The main checkout's HEAD, index, and files are unchanged. | host |
+| AC-076 | The repository list includes `.agents/worktrees/<name>` with its branch and `worktree: true`, and leaves out a prunable worktree whose folder was deleted. | host |
+| AC-077 | `resolveRepository` accepts a worktree outside the workspace folder whose common Git directory is inside it, and refuses a checkout of an unrelated repository with `git/repo-invalid`. | host |
+| AC-078 | `branches` marks a branch checked out in another worktree with that path, and `checkout` of it fails with `git/branch-in-worktree` without running `git checkout`. | host |
+| AC-079 | With `sessionDir` equal to the workspace root, `sessionRoot` is the workspace repository with `worktree: false`, and the client keeps the stored pick. | host and client |
+| AC-080 | The panel sends `projectionValues.workingDirectory` as `sessionDir`, selects the returned worktree, and shows the Worktree label. With no projection value it sends the row `cwd`. | client, [`client.test.mjs`](../../tests/client.test.mjs) |
+| AC-081 | When the Session row's working directory changes to a worktree while the panel is open, the panel switches to that worktree without a reload. | client |
+
+**Risks.**
+
+- The projection key `workingDirectory` and the row field `projectionValues` are host internals, not a documented plugin contract. Fallback: the row `cwd`, which gives the behavior before this change.
+- The main checkout lists `.agents/worktrees/<name>/` as untracked when DSH did not create an ignore file there. The panel does not hide it; this matches `git status`.
+- The Session row update when New worktree finishes is covered by the client test with a stub store. The running page was not checked, because the local GUI answers 401 without an authenticated session.
+- A worktree directory the user deleted without `git worktree prune` stays out of the picker until Git marks it prunable, and the path a stale branch reports can point at a folder that is gone. The branch is still refused, so the panel never checks it out.
+
 ## 20. Rollout
 
 Install as a bundle and enable it in Plugins. Open the right sidebar, then the **Git changes** card in the Start guide. No migration and no stored data beyond the two layout preferences.
@@ -450,6 +498,8 @@ These were open during design and are decided for 0.6.0.
 
 ## 23. Changelog
 
+- 2026-11-12: the panel follows the Session's working directory into a Git worktree, so a Session started with New worktree shows and writes that checkout instead of the main one. The repository picker lists each repository's linked worktrees with their branch and leaves out the ones Git marks prunable, a checkout outside the workspace folder is accepted when its common Git directory is inside the workspace, the header shows a Worktree label, and the branch menu marks a branch another worktree has checked out and refuses to switch to it. Creating, removing, and pruning worktrees stay out of the panel.
+- 2026-11-12: replaced the Plugin Manager artwork with the approved periwinkle window and Git branch logo. The `./icon` export and npm file list point to `icon.png`, a 512 × 512 PNG of 205,657 bytes, below DSH's 256 KiB limit. Image decoding, export resolution, and the npm pack dry-run file list passed. Installed Plugin Manager rendering remains unverified. Panel toolbar glyphs are unchanged.
 - 2026-11-09: created from the approved-direction brief and the interactive mockup. Nothing implemented.
 - 2026-11-09: revised the pending-work surface to JetBrains' Staged and Unstaged sections with per-file `+` and `−`, and the diff to a center gutter with change chevrons, include checkboxes, and a revision bar. Docs bumped to 0.2.0.
 - 2026-11-09: replaced the include checkbox with a hunk arrow that stages or unstages the hunk, and split Staged (HEAD to Staged) from Unstaged (Staged to Local). Docs bumped to 0.3.0.
@@ -506,7 +556,7 @@ Status is partial: the core flows work, and the remaining gaps are named rather 
 | Untracked revert, unborn unstage, deleted-file unstage | Fixed and covered by the review regression cases. |
 | Selection change during a diff load | The old diff is cleared before the new file loads. |
 | Compact right pane | Horizontal mode bar, list and diff take turns, back control. The split diff stays the default; the unified diff is one click away. |
-| Session workspace binding | The tab derives the workspace from the current session. A DSH worktree outside the workspace is not followed. |
+| Session workspace binding | The tab derives the workspace from the current session and follows the Session into a DSH worktree. Covered by `tests/worktree.test.mjs` and the client bundle run. |
 | Multiple repositories | Done. The workspace root plus repositories two levels below are listed; the picker scopes every view; the host validates the selected root. |
 | Repository without a repository | Done. Initialize is offered when the list is empty. Root initialization with existing repositories requires a warning. |
 | New branch without a commit | Done. The branch menu creates from HEAD and checks out; the host validates the name with `git check-ref-format`. |
@@ -522,6 +572,7 @@ Verification runs:
 - Host core against a temporary repository: status, row building, block stage, block unstage, confirmed revert, commit, branch and commit, log, detail, stash, conflict resolve. Result: `git core: all checks passed`.
 - Commit hooks against a temporary repository: a failing pre-commit hook refused a normal commit, Skip hooks committed through it, and branch and commit passed the flag through. Result: `npm test` passes the three commit cases.
 - Pull auto-stash against local remote repositories: blocked tracked changes restored with the index intact, a non-overlapping change left unstashed, an overwritten untracked file kept in the stash, a conflicting restore kept in the stash, a failed retry that restores the stash, a failed retry and restore that keep it, a mixed stash that restores the tracked part, a stash created during the pull that is never popped, and a divergent pull left untouched. Result: `npm test` passes the nine pull cases.
+- Session worktree against temporary repositories: the status follows the worktree, a commit there moves only its branch, the list adds an inside and an outside worktree and drops a prunable one, an unrelated repository is refused, a branch in another worktree is marked and refused, and a Session in the main checkout keeps the workspace repository. Result: `npm test` passes the six worktree cases.
 - HTTP envelope: owner result, forbidden non-owner, method mismatch, wrong method. Result: `http route: all checks passed`.
 - Client bundle with React in Chromium: slot registration, group list, one arrow in Staged, two in Unstaged, stage, revert dialog, resolve, commit, branch dialog, default name, log, log diff, stash, light theme, zero console errors. Result: both slots registered, icon registered, `errors []`.
 

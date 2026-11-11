@@ -1,6 +1,6 @@
 import { preferences, writeCommitMessage } from './ai.js';
 import { GitError } from './exec.js';
-import { applyBlocks, branches, checkout, cherryPickCommit, commit, commitDetail, createBranch, createBranchAndCommit, discardPaths, discoverRepositories, diff, fetch, findRepository, initRepository, log, pull, push, recentSubjects, resetToCommit, resolveConflict, resolveRepository, revertCommit, stagePaths, stagedPatch, stashApply, stashDrop, stashList, stashPush, status, undoCommit, unstagePaths, } from './git.js';
+import { applyBlocks, branches, checkout, cherryPickCommit, commit, commitDetail, createBranch, createBranchAndCommit, discardPaths, discoverRepositories, diff, fetch, findRepository, initRepository, log, pull, push, recentSubjects, resetToCommit, resolveConflict, resolveRepository, revertCommit, sessionCheckout, stagePaths, stagedPatch, stashApply, stashDrop, stashList, stashPush, status, undoCommit, unstagePaths, } from './git.js';
 /**
  * Read one field from a client payload.
  * @param payload the payload.
@@ -103,6 +103,16 @@ function workspaceInfo(workspace) {
     return { id: workspace.id, title: workspace.title, path: workspace.path };
 }
 /**
+ * Read the checkout a Session works in from one status request.
+ * @param runtime the runtime helpers.
+ * @param workspace the workspace.
+ * @param payload the client payload.
+ * @returns the checkout root and whether it is a linked worktree.
+ */
+function checkoutOf(runtime, workspace, payload) {
+    return sessionCheckout(runtime, workspace.path, optionalString(payload, 'sessionDir') ?? null);
+}
+/**
  * Read the status for one workspace, including the repository list.
  * @param runtime the runtime helpers.
  * @param workspace the workspace.
@@ -110,17 +120,21 @@ function workspaceInfo(workspace) {
  * @returns the snapshot.
  */
 async function statusFor(runtime, workspace, payload) {
+    const session = await checkoutOf(runtime, workspace, payload);
+    const sessionRoot = session.root;
+    const worktree = session.worktree;
     const requested = valueOf(payload, 'repo');
     if (typeof requested === 'string' && requested !== '') {
         const root = await resolveRepository(runtime, workspace.path, requested);
         const snapshot = await status(runtime, root);
-        return { ...snapshot, selected: root, workspace: workspaceInfo(workspace) };
+        return { ...snapshot, sessionRoot, worktree, selected: root, workspace: workspaceInfo(workspace) };
     }
     const repos = await discoverRepositories(runtime, workspace.path);
     const workspaceRepo = await findRepository(runtime, workspace.path);
-    if (workspaceRepo !== null) {
-        const snapshot = await status(runtime, workspaceRepo);
-        return { ...snapshot, repos, selected: workspaceRepo, workspace: workspaceInfo(workspace) };
+    const target = worktree && sessionRoot !== null ? sessionRoot : workspaceRepo;
+    if (target !== null) {
+        const snapshot = await status(runtime, target);
+        return { ...snapshot, repos, sessionRoot, worktree, selected: target, workspace: workspaceInfo(workspace) };
     }
     return {
         repo: false,
@@ -141,6 +155,8 @@ async function statusFor(runtime, workspace, payload) {
         cherryPicking: false,
         conflicts: [],
         repos,
+        sessionRoot,
+        worktree,
         selected: null,
         workspace: workspaceInfo(workspace),
     };
