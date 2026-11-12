@@ -194,6 +194,11 @@ const EN = {
   'action.unstageFile': 'Unstage file',
   'action.stageAll': 'Stage all',
   'action.unstageAll': 'Unstage all',
+  'selection.count': '{count} selected',
+  'selection.stage': 'Stage selected files',
+  'selection.unstage': 'Unstage selected files',
+  'selection.discard': 'Discard selected files',
+  'selection.clear': 'Clear selection',
   'ai.action': 'AI actions',
   'ai.write': 'Write a commit message',
   'ai.branch': 'Create a branch and commit',
@@ -300,6 +305,12 @@ const EN = {
   'discard.deleteConfirm': 'Delete file',
   'discard.done': 'Discarded changes in {name}',
   'discard.deleted': 'Deleted {name}',
+  'discard.titleMany': 'Discard changes in {count} files?',
+  'discard.titleOne': 'Discard changes in this file?',
+  'discard.bodyMany': 'Every local change in these files is lost. This cannot be undone.',
+  'discard.doneMany': 'Discarded changes in {count} files',
+  'discard.doneOne': 'Discarded changes in this file',
+  'discard.more': '{count} more',
   'sync.fetched': 'Fetched',
   'sync.pulled': 'Pulled',
   'sync.pulledStashed': 'Pulled and restored local changes',
@@ -444,6 +455,11 @@ const ZH = {
   'action.unstageFile': '取消暂存文件',
   'action.stageAll': '全部暂存',
   'action.unstageAll': '全部取消暂存',
+  'selection.count': '已选择 {count} 个文件',
+  'selection.stage': '暂存所选文件',
+  'selection.unstage': '取消暂存所选文件',
+  'selection.discard': '丢弃所选文件',
+  'selection.clear': '清除选择',
   'ai.action': 'AI 操作',
   'ai.write': '生成提交信息',
   'ai.branch': '创建分支并提交',
@@ -550,6 +566,12 @@ const ZH = {
   'discard.deleteConfirm': '删除文件',
   'discard.done': '已丢弃 {name} 的更改',
   'discard.deleted': '已删除 {name}',
+  'discard.titleMany': '丢弃 {count} 个文件的更改？',
+  'discard.titleOne': '丢弃此文件的更改？',
+  'discard.bodyMany': '这些文件的所有本地更改都会丢失。此操作无法撤销。',
+  'discard.doneMany': '已丢弃 {count} 个文件的更改',
+  'discard.doneOne': '已丢弃此文件的更改',
+  'discard.more': '还有 {count} 个',
   'sync.fetched': '已获取',
   'sync.pulled': '已拉取',
   'sync.pulledStashed': '已拉取并恢复本地更改',
@@ -1178,6 +1200,7 @@ button[data-forge-header]{display:none}
 .gitp-filerow{display:flex;align-items:center;gap:8px;width:100%;height:30px;padding:0 4px 0 8px;border:0;border-radius:var(--dsw-radius-sm,8px);background:transparent;cursor:pointer;text-align:left;color:var(--dsw-alias-label-primary);transition:background-color 100ms ease;user-select:none}
 .gitp-filerow:hover{background:var(--dsw-alias-interactive-bg-hover)}
 .gitp-filerow.is-selected{background:var(--dsw-alias-interactive-bg-active)}
+.gitp-filerow.is-focused{box-shadow:inset 2px 0 0 var(--dsw-alias-state-business-primary)}
 .gitp-status{display:inline-flex;align-items:center;justify-content:center;width:14px;font-family:var(--gitp-mono);font-size:11px;font-weight:600;flex:none}
 .gitp-status.is-modified{color:var(--dsw-alias-state-business-primary)}
 .gitp-status.is-added{color:var(--dsw-alias-state-success-primary)}
@@ -1193,6 +1216,14 @@ button[data-forge-header]{display:none}
 .gitp-filerow:hover .gitp-rowaction,.gitp-filerow:focus-within .gitp-rowaction,.gitp-filerow.is-selected .gitp-rowaction,.gitp-rowaction:focus-visible{opacity:1}
 .gitp-rowaction:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-accent,var(--dsw-alias-interactive-bg-active));color:var(--dsw-alias-label-primary)}
 .gitp-rowaction:disabled{opacity:.4;cursor:default}
+.gitp-batchbar{display:flex;align-items:center;gap:2px;height:30px;margin:0 8px 4px;padding:0 2px 0 8px;border-radius:var(--dsw-radius-sm,8px);background:var(--dsw-alias-interactive-bg-active);flex:none}
+.gitp-batch-count{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}
+.gitp-batch-btn{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer;flex:none;transition:background-color 120ms ease,color 120ms ease}
+.gitp-batch-btn:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.gitp-batch-btn.is-danger:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-danger,color-mix(in srgb,var(--dsw-alias-state-error-primary) 12%,transparent));color:var(--dsw-alias-state-error-primary)}
+.gitp-batch-btn:disabled{opacity:.4;cursor:default}
+.gitp-confirm-paths{margin:8px 0 0;padding-left:18px;max-height:160px;overflow:auto;font-family:var(--gitp-mono);font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}
+.gitp-confirm-more{margin-top:4px;font-size:12px;color:var(--dsw-alias-label-tertiary)}
 .gitp-commitbox{position:relative;flex:none;padding:8px;display:flex;flex-direction:column;gap:6px;border-top:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base)}
 .gitp-commitbox textarea{display:block;box-sizing:border-box;width:100%;height:72px;min-height:72px;overflow-y:hidden;resize:none;padding:8px 10px;border:var(--gitp-hair) solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-sm,8px);background:var(--dsw-specific-input-major,var(--dsw-alias-bg-layer-1));color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px;transition:border-color 120ms ease}
 .gitp-commitbox textarea:focus{outline:none;border-color:var(--dsw-alias-state-business-primary)}
@@ -1805,13 +1836,14 @@ interface FileRowProps {
   entry: StatusEntry;
   side: 'staged' | 'unstaged' | 'conflict';
   selected: boolean;
+  focused: boolean;
   busy: boolean;
   t: Translator;
-  onSelect: () => void;
+  onActivate: (event: React.MouseEvent<HTMLDivElement> | React.KeyboardEvent<HTMLDivElement> | null) => void;
   onToggle: () => void;
 }
 
-function FileRow({ entry, side, selected, busy, t, onSelect, onToggle }: FileRowProps) {
+function FileRow({ entry, side, selected, focused, busy, t, onActivate, onToggle }: FileRowProps) {
   const path = splitPath(entry.path);
   const add = side === 'staged' ? entry.stagedAdd : entry.add;
   const del = side === 'staged' ? entry.stagedDel : entry.del;
@@ -1819,15 +1851,15 @@ function FileRow({ entry, side, selected, busy, t, onSelect, onToggle }: FileRow
   return h(
     'div',
     {
-      className: cx('gitp-filerow', selected && 'is-selected'),
+      className: cx('gitp-filerow', selected && 'is-selected', focused && 'is-focused'),
       role: 'button',
       tabIndex: 0,
-      'aria-current': selected ? 'true' : undefined,
-      onClick: () => onSelect(),
+      'aria-pressed': selected,
+      onClick: (event: React.MouseEvent<HTMLDivElement>) => onActivate(event),
       onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>) => {
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
-          onSelect();
+          onActivate(event);
         }
       },
     },
@@ -1883,12 +1915,15 @@ interface ChangesViewProps {
   staged: StatusEntry[];
   unstaged: StatusEntry[];
   selection: FileSelection | null;
-  onSelect: (selection: FileSelection) => void;
+  onSelect: (selection: FileSelection | null) => void;
   busy: boolean;
   fileBusy: boolean;
   onToggleFile: (entry: StatusEntry, side: 'staged' | 'unstaged') => void;
   onToggleAll: (side: 'staged' | 'unstaged') => void;
   onDiscard: (entry: StatusEntry) => void;
+  onBatchStage: (entries: StatusEntry[]) => Promise<boolean>;
+  onBatchUnstage: (entries: StatusEntry[]) => Promise<boolean>;
+  onBatchDiscard: (entries: StatusEntry[]) => void;
   diff: DiffPayload | null;
   diffLoading: boolean;
   layout: string;
@@ -1932,6 +1967,9 @@ function ChangesView({
   onToggleFile,
   onToggleAll,
   onDiscard,
+  onBatchStage,
+  onBatchUnstage,
+  onBatchDiscard,
   diff,
   diffLoading,
   layout,
@@ -1967,6 +2005,13 @@ function ChangesView({
   const changesListRef = useRef<HTMLDivElement | null>(null);
   const messageRef = useRef<HTMLTextAreaElement | null>(null);
   useAutoGrow(messageRef, message);
+  const keyOf = (side: FileSide, path: string): string => `${side}\u0000${path}`;
+  const [picked, setPicked] = useState<Set<string>>(() => {
+    if (selection === null || selection.side === 'conflict') return new Set();
+    return new Set([keyOf(selection.side, selection.path)]);
+  });
+  const [batchMode, setBatchMode] = useState(false);
+  const pickedAnchor = useRef<FileSelection | null>(null);
   const [collapsed, setCollapsed] = useState({ conflicts: false, staged: false, unstaged: false });
   const toggleSection = (key: 'conflicts' | 'staged' | 'unstaged'): void =>
     setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -1976,6 +2021,153 @@ function ChangesView({
   const filteredConflicts = useMemo(() => conflicts.filter(match), [conflicts, needle]);
   const filteredStaged = useMemo(() => staged.filter(match), [staged, needle]);
   const filteredUnstaged = useMemo(() => unstaged.filter(match), [unstaged, needle]);
+
+  const entryOfKey = (key: string): { side: 'staged' | 'unstaged'; entry: StatusEntry } | null => {
+    const cut = key.indexOf('\u0000');
+    if (cut < 0) return null;
+    const keySide = key.slice(0, cut);
+    if (keySide !== 'staged' && keySide !== 'unstaged') return null;
+    const keyPath = key.slice(cut + 1);
+    const entry = (keySide === 'staged' ? staged : unstaged).find((item) => item.path === keyPath);
+    return entry === undefined ? null : { side: keySide, entry };
+  };
+  const pickedEntries = useMemo(() => {
+    const found: { side: 'staged' | 'unstaged'; entry: StatusEntry }[] = [];
+    for (const key of picked) {
+      const item = entryOfKey(key);
+      if (item !== null) found.push(item);
+    }
+    return found;
+  }, [picked, staged, unstaged]);
+  const stagePicked = pickedEntries.filter((item) => item.side === 'unstaged');
+  const unstagePicked = pickedEntries.filter((item) => item.side === 'staged');
+
+  useEffect(() => {
+    setPicked((current) => {
+      if (current.size === 0) return current;
+      const next = new Set<string>();
+      for (const key of current) if (entryOfKey(key) !== null) next.add(key);
+      return next.size === current.size ? current : next;
+    });
+  }, [snapshot, selection]);
+
+  useEffect(() => {
+    if (picked.size === 0) setBatchMode(false);
+  }, [picked.size]);
+
+  function selectOne(side: FileSide, entry: StatusEntry): void {
+    if (side === 'conflict') {
+      pickedAnchor.current = null;
+      setPicked(new Set());
+      onSelect({ side, path: entry.path, renamed: false });
+      return;
+    }
+    pickedAnchor.current = { side, path: entry.path, renamed: entry.kind === 'renamed' };
+    setPicked(new Set([keyOf(side, entry.path)]));
+    onSelect({ side, path: entry.path, renamed: entry.kind === 'renamed' });
+  }
+
+  function togglePicked(side: 'staged' | 'unstaged', entry: StatusEntry): void {
+    const key = keyOf(side, entry.path);
+    if (picked.has(key)) {
+      const next = new Set(picked);
+      next.delete(key);
+      if (selection !== null && selection.side === side && selection.path === entry.path) {
+        const last = [...next].pop();
+        const item = last === undefined ? null : entryOfKey(last);
+        onSelect(
+          item === null
+            ? null
+            : { side: item.side, path: item.entry.path, renamed: item.entry.kind === 'renamed' },
+        );
+      }
+      setPicked(next);
+      return;
+    }
+    pickedAnchor.current = { side, path: entry.path, renamed: entry.kind === 'renamed' };
+    setPicked(new Set([...picked, key]));
+    onSelect({ side, path: entry.path, renamed: entry.kind === 'renamed' });
+  }
+
+  function selectRange(side: 'staged' | 'unstaged', entry: StatusEntry): void {
+    const list = side === 'staged' ? filteredStaged : filteredUnstaged;
+    const anchorPath =
+      pickedAnchor.current !== null && pickedAnchor.current.side === side ? pickedAnchor.current.path : null;
+    const from = anchorPath === null ? -1 : list.findIndex((item) => item.path === anchorPath);
+    const to = list.findIndex((item) => item.path === entry.path);
+    if (from < 0 || to < 0) {
+      selectOne(side, entry);
+      return;
+    }
+    const [first, last] = from <= to ? [from, to] : [to, from];
+    setPicked(new Set(list.slice(first, last + 1).map((item) => keyOf(side, item.path))));
+    onSelect({ side, path: entry.path, renamed: entry.kind === 'renamed' });
+  }
+
+  function activate(
+    side: FileSide,
+    entry: StatusEntry,
+    event: React.MouseEvent<HTMLDivElement> | React.KeyboardEvent<HTMLDivElement> | null,
+  ): void {
+    const modified = event !== null && (event.metaKey || event.ctrlKey);
+    const ranged = event !== null && event.shiftKey;
+    if (side === 'conflict') {
+      if (modified || ranged) return;
+      setBatchMode(false);
+      selectOne(side, entry);
+      return;
+    }
+    if (event === null) {
+      setBatchMode(false);
+      selectOne(side, entry);
+      return;
+    }
+    if (ranged) {
+      setBatchMode(true);
+      selectRange(side, entry);
+      return;
+    }
+    if (modified) {
+      setBatchMode(true);
+      togglePicked(side, entry);
+      return;
+    }
+    setBatchMode(false);
+    selectOne(side, entry);
+  }
+
+  function changeFilter(next: string): void {
+    setFilter(next);
+    if (picked.size === 0) return;
+    const batchSelected = batchMode;
+    setPicked(new Set());
+    setBatchMode(false);
+    pickedAnchor.current = null;
+    // A filter typed during a batch returns to the list instead of the last diff.
+    if (batchSelected) onSelect(null);
+  }
+
+  function clearPicked(): void {
+    setPicked(new Set());
+    setBatchMode(false);
+    pickedAnchor.current = null;
+    onSelect(null);
+  }
+
+  async function runBatch(kind: 'stage' | 'unstage' | 'discard'): Promise<void> {
+    const items = kind === 'stage' ? stagePicked : kind === 'unstage' ? unstagePicked : pickedEntries;
+    if (items.length === 0) return;
+    const entries = items.map((item) => item.entry);
+    if (kind === 'discard') {
+      onBatchDiscard(entries);
+      return;
+    }
+    const ok = kind === 'stage' ? await onBatchStage(entries) : await onBatchUnstage(entries);
+    if (!ok) return;
+    setPicked(new Set());
+    setBatchMode(false);
+    changesListRef.current?.querySelector<HTMLElement>('.gitp-filerow')?.focus();
+  }
 
   const discardEntry =
     selection === null || selection.side === 'conflict'
@@ -1993,8 +2185,8 @@ function ChangesView({
     return { add, del };
   }, [staged]);
 
-  const showList = !compact || selection === null;
-  const showDiff = !compact || selection !== null;
+  const showList = !compact || selection === null || batchMode;
+  const showDiff = !compact || (selection !== null && !batchMode);
 
   const totalMatching = filteredConflicts.length + filteredStaged.length + filteredUnstaged.length;
   const totalRaw = conflicts.length + staged.length + unstaged.length;
@@ -2018,7 +2210,7 @@ function ChangesView({
             h('input', {
               type: 'text',
               value: filter,
-              onChange: (event) => setFilter(event.target.value),
+              onChange: (event) => changeFilter(event.target.value),
               placeholder: t('filter.placeholder'),
               'aria-label': t('filter.placeholder'),
               spellCheck: false,
@@ -2029,12 +2221,67 @@ function ChangesView({
                   {
                     type: 'button',
                     className: 'gitp-filter-clear',
-                    onClick: () => setFilter(''),
+                    onClick: () => changeFilter(''),
                     'aria-label': t('filter.clear'),
                   },
                   h(Icon, { path: paths.close, size: 10 }),
                 )
               : null,
+          )
+        : null,
+      picked.size > 1
+        ? h(
+            'div',
+            { className: 'gitp-batchbar', role: 'group', 'aria-label': t('selection.count', { count: picked.size }) },
+            h('span', { className: 'gitp-batch-count' }, t('selection.count', { count: picked.size })),
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'gitp-batch-btn',
+                'aria-label': t('selection.stage'),
+                title: t('selection.stage'),
+                disabled: fileBusy || stagePicked.length === 0,
+                onClick: () => runBatch('stage'),
+              },
+              h(Icon, { path: paths.plus, size: 14 }),
+            ),
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'gitp-batch-btn',
+                'aria-label': t('selection.unstage'),
+                title: t('selection.unstage'),
+                disabled: fileBusy || unstagePicked.length === 0,
+                onClick: () => runBatch('unstage'),
+              },
+              h(Icon, { path: paths.minus, size: 14 }),
+            ),
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'gitp-batch-btn is-danger',
+                'aria-label': t('selection.discard'),
+                title: t('selection.discard'),
+                disabled: fileBusy,
+                onClick: () => runBatch('discard'),
+              },
+              h(Icon, { path: paths.trash, size: 14 }),
+            ),
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'gitp-batch-btn',
+                'aria-label': t('selection.clear'),
+                title: t('selection.clear'),
+                disabled: fileBusy,
+                onClick: clearPicked,
+              },
+              h(Icon, { path: paths.close, size: 14 }),
+            ),
           )
         : null,
       h(
@@ -2073,9 +2320,10 @@ function ChangesView({
                       entry,
                       side: 'conflict',
                       selected: selection?.side === 'conflict' && selection.path === entry.path,
+                      focused: false,
                       busy: fileBusy,
                       t,
-                      onSelect: () => onSelect({ side: 'conflict', path: entry.path, renamed: false }),
+                      onActivate: (event) => activate('conflict', entry, event),
                       onToggle: () => {},
                     }),
                   )
@@ -2129,11 +2377,13 @@ function ChangesView({
                       key: `staged:${entry.path}`,
                       entry,
                       side: 'staged',
-                      selected: selection?.side === 'staged' && selection.path === entry.path,
+                      selected:
+                        picked.has(keyOf('staged', entry.path)) ||
+                        (picked.size === 0 && selection?.side === 'staged' && selection.path === entry.path),
+                      focused: picked.size > 1 && selection?.side === 'staged' && selection.path === entry.path,
                       busy: fileBusy,
                       t,
-                      onSelect: () =>
-                        onSelect({ side: 'staged', path: entry.path, renamed: entry.kind === 'renamed' }),
+                      onActivate: (event) => activate('staged', entry, event),
                       onToggle: () => onToggleFile(entry, 'staged'),
                     }),
                   )
@@ -2187,11 +2437,13 @@ function ChangesView({
                       key: `unstaged:${entry.path}`,
                       entry,
                       side: 'unstaged',
-                      selected: selection?.side === 'unstaged' && selection.path === entry.path,
+                      selected:
+                        picked.has(keyOf('unstaged', entry.path)) ||
+                        (picked.size === 0 && selection?.side === 'unstaged' && selection.path === entry.path),
+                      focused: picked.size > 1 && selection?.side === 'unstaged' && selection.path === entry.path,
                       busy: fileBusy,
                       t,
-                      onSelect: () =>
-                        onSelect({ side: 'unstaged', path: entry.path, renamed: entry.kind === 'renamed' }),
+                      onActivate: (event) => activate('unstaged', entry, event),
                       onToggle: () => onToggleFile(entry, 'unstaged'),
                     }),
                   )
@@ -4602,7 +4854,7 @@ function GitPanel({ call, t, useWorkspaces, useSessions, sessionId, useTabInfo, 
   const [branchBusy, setBranchBusy] = useState(false);
   const [confirm, setConfirm] = useState<{
     title: string;
-    body: string;
+    body: React.ReactNode;
     confirmLabel: string;
     danger: boolean;
     run: () => void;
@@ -4838,7 +5090,11 @@ function GitPanel({ call, t, useWorkspaces, useSessions, sessionId, useTabInfo, 
     setDiffNonce((value) => value + 1);
   }
 
-  function selectFile(next: FileSelection): void {
+  function selectFile(next: FileSelection | null): void {
+    if (next === null) {
+      setSelection(null);
+      return;
+    }
     if (selection !== null && selection.side === next.side && selection.path === next.path) return;
     setDiff(null);
     setSelection(next);
@@ -4890,6 +5146,80 @@ function GitPanel({ call, t, useWorkspaces, useSessions, sessionId, useTabInfo, 
       setError(failureOf(event));
     } finally {
       setBusy(null);
+    }
+  }
+
+  async function batchToggle(entries: StatusEntry[], side: 'staged' | 'unstaged'): Promise<boolean> {
+    if (busy !== null || entries.length === 0) return false;
+    setBusy('file');
+    setError(null);
+    try {
+      const result = await call(side === 'staged' ? 'unstage' : 'stage', {
+        workspaceId: workspaceId,
+        repo: repoRoot,
+        paths: entryPaths(entries),
+      });
+      applyStatus(result);
+      setSelection(null);
+      setDiff(null);
+      bumpDiff();
+      return true;
+    } catch (event) {
+      setError(failureOf(event));
+      return false;
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function askDiscardMany(entries: StatusEntry[]): void {
+    if (busy !== null) return;
+    const paths = [...new Set(entries.map((entry) => entry.path))];
+    if (paths.length === 0) return;
+    setConfirm({
+      title: t(paths.length === 1 ? 'discard.titleOne' : 'discard.titleMany', { count: paths.length }),
+      body: h(
+        'div',
+        null,
+        h('div', null, t('discard.bodyMany')),
+        h(
+          'ul',
+          { className: 'gitp-confirm-paths' },
+          paths.slice(0, 8).map((path) => h('li', { key: path }, path)),
+        ),
+        paths.length > 8
+          ? h('div', { className: 'gitp-confirm-more' }, t('discard.more', { count: paths.length - 8 }))
+          : null,
+      ),
+      confirmLabel: t('discard.confirm'),
+      danger: true,
+      run: () => void discardMany(paths),
+    });
+  }
+
+  async function discardMany(paths: string[]): Promise<void> {
+    if (busy !== null) return;
+    setBusy('discard');
+    setError(null);
+    try {
+      const result = await call('discard', {
+        workspaceId: workspaceId,
+        repo: repoRoot,
+        paths,
+        confirm: true,
+      });
+      applyStatus(result);
+      setSelection(null);
+      setDiff(null);
+      bumpDiff();
+      setToast(
+        paths.length === 1 ? t('discard.doneOne') : t('discard.doneMany', { count: paths.length }),
+      );
+    } catch (event) {
+      setError(failureOf(event));
+    } finally {
+      setBusy(null);
+      setConfirm(null);
     }
   }
 
@@ -5383,6 +5713,9 @@ function GitPanel({ call, t, useWorkspaces, useSessions, sessionId, useTabInfo, 
                     onToggleFile: toggleFile,
                     onToggleAll: toggleAll,
                     onDiscard: askDiscard,
+                    onBatchStage: (entries) => batchToggle(entries, 'unstaged'),
+                    onBatchUnstage: (entries) => batchToggle(entries, 'staged'),
+                    onBatchDiscard: askDiscardMany,
                     diff,
                     diffLoading,
                     layout: effectiveLayout,

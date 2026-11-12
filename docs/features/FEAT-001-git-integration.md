@@ -3,7 +3,7 @@ id: FEAT-001
 title: Git integration
 status: active
 implementation_status: shipped_unverified
-version: 0.18.0
+version: 0.23.0
 owners: [Parth Patel]
 created: 2026-11-09
 last_updated: 2026-11-12
@@ -269,6 +269,7 @@ Every command runs with `LC_ALL=C`, `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS
 - BR-025. Pull is fast-forward only even when the repository sets `pull.rebase`. When Git refuses the update because local changes are in the way, the working tree is stashed, the pull is retried, and the stash is popped with the index intact, so staged files stay staged. When an untracked file would be overwritten, every untracked file joins the stash so the pull can proceed; the whole stash is restored or kept. If the pop cannot apply cleanly, the pull stays applied, the stash is kept, and the client reports it.
 - BR-026. Discard changes restores the named files to HEAD in the index and the working tree and removes them from Staged and Unstaged. The request names the exact selected entries; the host expands a rename by its recorded old path. An untracked file is deleted from disk, but an untracked nested repository is left in place and reported. Discarding a rename is refused when another unselected file occupies its old path. The host requires a confirmation, refuses a conflicted file, and refuses while a merge, rebase, revert, or cherry-pick is in progress. There is no local undo.
 - BR-027. The commit box and the branch dialog offer Skip hooks. When it is checked, the host commits with `git commit --no-verify`; otherwise Git hooks run. The option defaults off, is not persisted, and applies to a normal commit, an amend, and a branch and commit. The host only skips hooks when the request asks for it.
+- BR-028. The Changes list can select several files. A plain click selects one and collapses the batch; Cmd-click, Ctrl-click, or Ctrl/Cmd+Space toggles one; Shift-click or Shift+Space selects the inclusive range inside one section, following the active filter. Changing the filter clears the batch. A batch bar appears at two or more selected files and offers Stage, Unstage, Discard, and Clear. Stage sends every selected unstaged path, Unstage every selected staged path, and Discard the unique selected paths with `confirm: true`, each in one request; a successful action clears the batch and closes the open diff. A conflicted file cannot join a batch, and a modified click on it does nothing. In the compact layout a modified click keeps the list mounted so the bar stays reachable. The row controls, section controls, and the diff header trash control keep their single-file behavior.
 
 ## 13. Acceptance criteria
 
@@ -347,6 +348,14 @@ Every command runs with `LC_ALL=C`, `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS
 | AC-071 | A failing pre-commit hook refuses a normal commit, shows the hook output, and leaves the message and staged files in place. |
 | AC-072 | With Skip hooks checked, the commit succeeds through the failing hook and the resulting commit has the typed message. |
 | AC-073 | Branch and commit passes Skip hooks through, so the branch is created and the commit lands despite the failing hook. |
+| AC-082 | A plain click selects one file and renders its diff. A Cmd/Ctrl-click adds a second file and the batch bar shows the count with Stage, Unstage, and Discard. Clear hides the bar and drops the highlight. |
+| AC-083 | Shift-click selects the inclusive range from the last clicked file inside one section, follows the active filter, and never crosses from Staged to Unstaged. Typing a filter clears the batch. |
+| AC-084 | Stage sends one request with every selected unstaged path, a rename contributes both paths, and the successful action clears the batch and closes the diff. |
+| AC-085 | Unstage sends one request with every selected staged path, and the successful action clears the batch and closes the diff. |
+| AC-086 | Discard opens one confirmation naming the count and paths, and the confirmed request sends the unique selected paths in one `discard` call. A modified click on a conflicted file leaves the picks and the bar in place. |
+| AC-087 | The batch bar hides at one or zero selected files. Each control is locale-backed and disables when no selected file supports it. |
+| AC-088 | In the compact layout, a Cmd/Ctrl-click keeps the list mounted, and the batch bar stays reachable without expanding the panel. A successful action returns to the list. |
+| AC-089 | Tab reaches a file row. Enter or Space opens it, Ctrl/Cmd+Space toggles it in the batch, and Shift+Space extends the range. |
 
 ## 14. Security and privacy
 
@@ -469,6 +478,53 @@ The two snapshot fields are optional because only a `status` response knows them
 - The Session row update when New worktree finishes is covered by the client test with a stub store. The running page was not checked, because the local GUI answers 401 without an authenticated session.
 - A worktree directory the user deleted without `git worktree prune` stays out of the picker until Git marks it prunable, and the path a stale branch reports can point at a folder that is gone. The branch is still refused, so the panel never checks it out.
 
+### Multi-select and batch actions
+
+**Status: Current.** Built 2026-11-12. The package version moves with the release step, not this change.
+
+**Problem.** The list selects one file at a time. Staging several files that share a purpose means clicking each row control or the section control, and discarding several means repeating the diff header action. Stash already supports choosing files in its dialog, and Apply, Pop, and Drop work on one stash. This change leaves stash alone.
+
+**Behavior.**
+
+- Plain click selects one file, renders its diff, and collapses any batch selection. Enter or Space on a focused row does the same.
+- Cmd-click on macOS, Ctrl-click elsewhere, toggles one file in the selection, and Ctrl/Cmd+Space does the same from the keyboard. The selection may span Staged and Unstaged.
+- Shift-click selects the inclusive range in one section, from the last clicked file to the clicked file, and Shift+Space does the same. The range replaces the previous selection and follows the active filter. Changing the filter clears the batch.
+- A modified or shifted click on a conflicted file is ignored. A plain click opens the conflict and clears the batch.
+- A batch bar sits above the file list when two or more files are selected. It shows the count and icon controls for Stage, Unstage, Discard, and Clear. A control disables when no selected file qualifies, and every control names itself through `aria-label` and a matching `title`.
+- In the compact layout the list normally gives way to the diff after a plain click. A modified or shifted click keeps the list, so the bar stays reachable, and a successful action returns to the list.
+- Stage sends one `stage` request with every selected unstaged path, expanding a rename to its old path. Unstage sends one `unstage` request with every selected staged path. Each successful action clears the batch and closes the open diff.
+- Discard opens one confirmation that names the count and the paths, then sends one `discard` request with `confirm: true` and the unique selected paths. A successful discard clears the batch and closes the diff. The host applies its existing guards to every named entry: a conflict, an operation in progress, or a rename whose old path holds another file fails the request.
+- Row `+` and `−`, section bulk controls, and the diff header trash control stay as they are.
+
+**Contract.** No change to [`src/contract.ts`](../../src/contract.ts). The batch actions reuse the existing `stage`, `unstage`, and `discard` payloads, which already carry `paths: string[]`; `discard` already carries `confirm`.
+
+**Acceptance criteria.** Met. The same rows are in section 13.
+
+| ID | Criterion | Test |
+| --- | --- | --- |
+| AC-082 | A plain click selects one file and renders its diff. A Cmd/Ctrl-click adds a second file and the batch bar shows the count with Stage, Unstage, and Discard. Clear hides the bar and drops the highlight. | client |
+| AC-083 | Shift-click selects the inclusive range from the last clicked file inside one section. The range follows the active filter, never crosses a section, and typing a filter clears the batch. | client |
+| AC-084 | Stage sends one request with every selected unstaged path, a rename contributes both paths, and the successful action clears the batch and closes the diff. | client |
+| AC-085 | Unstage sends one request with every selected staged path, and the successful action clears the batch and closes the diff. | client |
+| AC-086 | Discard opens one confirmation naming the count and paths, and the confirmed request sends the unique selected paths in one `discard` call. A modified click on a conflicted file keeps the picks and the bar. | client |
+| AC-087 | The batch bar hides at one or zero selected files. Each control is locale-backed and disables when no selected file supports it. | client |
+| AC-088 | In the compact layout below 900 pixels, a modified click keeps the list and the batch bar reachable, and a successful action returns to the list. | client |
+| AC-089 | Tab reaches a file row; Enter or Space opens it, Ctrl/Cmd+Space toggles it in the batch, and Shift+Space extends the range. | client |
+
+**Tests.**
+
+- `tests/client.test.mjs`: render the panel against a stub that applies the status change each action returns, then assert the bar, the payloads, the cleared batch, and the moved rows. The `renderPanel` helper gains `entries` and `compact` options, and a stubbed `ResizeObserver` drives the compact layout.
+- Eight cases were added: the bar appears on the second pick, Shift selects a range and a filter resets it, Stage and Unstage send one request each and clear the batch, Discard confirms the set while a conflict click keeps the picks, the bar hides and names its controls, compact mode keeps the list, and Ctrl+Space toggles from the keyboard. The suite reports 47 passing tests.
+- No host case was added: `tests/discard.test.mjs` AC-059 already discards two paths in one call, and the section actions already exercise multi-path `stage` and `unstage`.
+- Commands: `npm run typecheck`, `npm test`, `npm run build`.
+
+**Risks.**
+
+- Modifier selection is less discoverable than a checkbox. The bar appearing on the second selected file makes the affordance visible after one modifier click. DEC-002 still rejects a checkbox per row.
+- Arrow-key navigation between rows is not implemented. Tab reaches each row, and the modifier keys cover toggling and range selection.
+- A status refresh can remove a selected path. The client drops only the keys the snapshot no longer holds and keeps the rest of the batch.
+- In the compact layout the diff is not previewed while a batch is active. A plain click on a row returns to the diff.
+
 ## 20. Rollout
 
 Install as a bundle and enable it in Plugins. Open the right sidebar, then the **Git changes** card in the Start guide. No migration and no stored data beyond the two layout preferences.
@@ -498,6 +554,7 @@ These were open during design and are decided for 0.6.0.
 
 ## 23. Changelog
 
+- 2026-11-12: 0.23.0. The Changes list selects several files. Cmd-click or Ctrl-click toggles a file, Shift-click selects the range in one section, and a batch bar appears at two or more selected files with Stage, Unstage, Discard, and Clear. Each action sends one request with the selected paths, using the existing endpoints, then clears the batch and closes the diff. Ctrl/Cmd+Space and Shift+Space mirror the modifiers from the keyboard, a filter change clears the batch, a conflict click keeps the picks, and the compact pane keeps the list and bar on screen while a batch is active. Stash and stash restore are unchanged.
 - 2026-11-12: 0.22.0. Fixed four worktree defects found in review before the release. A worktree that sits in a plain folder was listed twice and its family's main checkout was listed as a worktree of it, because the folder scan and the worktree list both found it; checkouts are now grouped by common Git directory. A prunable worktree no longer offers a branch that Git refuses to check out. A locked worktree whose folder is gone is no longer listed. A cd inside the checkout the panel is already on no longer discards a manual repository pick. The picker also offers Initialize at the workspace root when only a worktree has an outside path.
 - 2026-11-12: the panel follows the Session's working directory into a Git worktree, so a Session started with New worktree shows and writes that checkout instead of the main one. The repository picker lists each repository's linked worktrees with their branch and leaves out the ones Git marks prunable, a checkout outside the workspace folder is accepted when its common Git directory is inside the workspace, the header shows a Worktree label, and the branch menu marks a branch another worktree has checked out and refuses to switch to it. Creating, removing, and pruning worktrees stay out of the panel.
 - 2026-11-12: replaced the Plugin Manager artwork with the approved periwinkle window and Git branch logo. The `./icon` export and npm file list point to `icon.png`, a 512 × 512 PNG of 205,657 bytes, below DSH's 256 KiB limit. Image decoding, export resolution, and the npm pack dry-run file list passed. Installed Plugin Manager rendering remains unverified. Panel toolbar glyphs are unchanged.
@@ -547,6 +604,7 @@ Status is partial: the core flows work, and the remaining gaps are named rather 
 | Log, lanes, refs, commit detail, read-only parent diff | Done. |
 | File-level stash | Done. |
 | File discard | Done. The diff header's trash control restores tracked files to HEAD, deletes untracked files, and restores a rename. The host requires confirmation and refuses conflicts or an operation in progress. Covered by `tests/discard.test.mjs`. |
+| Multi-select and batch actions | Done. Cmd/Ctrl-click or Ctrl/Cmd+Space toggles a file, Shift-click or Shift+Space selects a filtered range, and one bar stages, unstages, or discards the selection in one request. Compact mode keeps the list and bar on screen while the batch is active. Covered by eight cases in `tests/client.test.mjs`. |
 | Hunk-level stash | Not implemented. |
 | Conflict detection and whole-side resolve | Done. |
 | Three-pane merge editor | Not implemented. |
@@ -574,6 +632,7 @@ Verification runs:
 - Commit hooks against a temporary repository: a failing pre-commit hook refused a normal commit, Skip hooks committed through it, and branch and commit passed the flag through. Result: `npm test` passes the three commit cases.
 - Pull auto-stash against local remote repositories: blocked tracked changes restored with the index intact, a non-overlapping change left unstashed, an overwritten untracked file kept in the stash, a conflicting restore kept in the stash, a failed retry that restores the stash, a failed retry and restore that keep it, a mixed stash that restores the tracked part, a stash created during the pull that is never popped, and a divergent pull left untouched. Result: `npm test` passes the nine pull cases.
 - Session worktree against temporary repositories: the status follows the worktree, a commit there moves only its branch, the list adds an inside and an outside worktree once each and drops a prunable one and a locked one whose folder is gone, an unrelated repository is refused, a branch in another worktree is marked and refused, a prunable worktree still marks its branch, and a Session in the main checkout keeps the workspace repository. Result: `npm test` passes the six host worktree cases and the five client cases.
+- Multi-select: the client suite runs plain, modified, shifted, and keyboard gestures against a status stub that applies each action's new status, then asserts the payloads, the cleared batch, the moved rows, the confirmation dialog, and the compact layout. Result: `npm test` passes 47 cases, 0 fail.
 - HTTP envelope: owner result, forbidden non-owner, method mismatch, wrong method. Result: `http route: all checks passed`.
 - Client bundle with React in Chromium: slot registration, group list, one arrow in Staged, two in Unstaged, stage, revert dialog, resolve, commit, branch dialog, default name, log, log diff, stash, light theme, zero console errors. Result: both slots registered, icon registered, `errors []`.
 

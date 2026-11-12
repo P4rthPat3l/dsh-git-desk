@@ -181,7 +181,7 @@ const NESTED_DIR = '/ws/b';
  * @param {object} payload the request payload.
  * @returns {object} the snapshot.
  */
-function worktreeStatus(payload) {
+function worktreeStatus(payload, entries = []) {
   const dir = typeof payload.sessionDir === 'string' ? payload.sessionDir : '';
   const worktree = dir === WORKTREE_DIR || dir.startsWith(`${WORKTREE_DIR}/`);
   const nested = dir === NESTED_DIR || dir.startsWith(`${NESTED_DIR}/`);
@@ -190,7 +190,7 @@ function worktreeStatus(payload) {
     repo: true,
     root,
     branch: { oid: 'abc1234', name: worktree ? 'dsh-abc' : 'main', upstream: null, ahead: 0, behind: 0, detached: false, initial: false },
-    entries: [],
+    entries,
     merging: false,
     rebasing: false,
     reverting: false,
@@ -234,6 +234,60 @@ async function until(check, label) {
 }
 
 /**
+ * Build one changed-file entry for the panel stub.
+ * @param filePath the repository-relative path.
+ * @param overrides the fields this case needs.
+ * @returns the entry.
+ */
+function statusEntry(filePath, overrides = {}) {
+  return {
+    path: filePath,
+    kind: 'tracked',
+    index: 'M',
+    worktree: 'M',
+    conflicted: false,
+    untracked: false,
+    staged: false,
+    unstaged: true,
+    letter: 'M',
+    both: false,
+    add: 1,
+    del: 0,
+    stagedAdd: 0,
+    stagedDel: 0,
+    binary: false,
+    ...overrides,
+  };
+}
+
+/**
+ * Build the empty diff payload the panel expects when a row is opened.
+ * @param payload the diff request.
+ * @returns the payload.
+ */
+function emptyDiff(payload) {
+  return {
+    path: payload.path,
+    side: payload.side,
+    labels: { left: '', right: '' },
+    binary: false,
+    conflict: false,
+    left: [],
+    right: [],
+    leftTrailing: false,
+    rightTrailing: false,
+    rows: [],
+    blocks: [],
+    add: 0,
+    del: 0,
+    baseHash: null,
+    targetHash: null,
+    leftMissing: false,
+    rightMissing: false,
+  };
+}
+
+/**
  * Render the Git tab body against a stub session store. The panel is unmounted
  * after the test, so a failed assertion cannot leave the status poll running.
  * @param {object} t the test context.
@@ -259,9 +313,36 @@ async function renderPanel(t, options = {}) {
   });
   const calls = [];
   const store = { session: options.session ?? { cwd: MAIN_DIR } };
+  const state = { entries: (options.entries ?? []).map((entry) => ({ ...entry })) };
+  const snapshot = (payload) => worktreeStatus({ repo: payload.repo }, state.entries);
   const call = async (endpoint, payload) => {
     calls.push({ endpoint, payload });
-    return endpoint === 'status' ? worktreeStatus(payload) : {};
+    if (endpoint === 'status') return worktreeStatus(payload, state.entries);
+    if (endpoint === 'diff') return emptyDiff(payload);
+    if (endpoint === 'stage') {
+      const paths = new Set(payload.paths);
+      state.entries = state.entries.map((entry) =>
+        paths.has(entry.path) && entry.unstaged
+          ? { ...entry, staged: true, unstaged: false, worktree: ' ' }
+          : entry,
+      );
+      return snapshot(payload);
+    }
+    if (endpoint === 'unstage') {
+      const paths = new Set(payload.paths);
+      state.entries = state.entries.map((entry) =>
+        paths.has(entry.path) && entry.staged
+          ? { ...entry, staged: false, unstaged: true, index: ' ' }
+          : entry,
+      );
+      return snapshot(payload);
+    }
+    if (endpoint === 'discard') {
+      const paths = new Set(payload.paths);
+      state.entries = state.entries.filter((entry) => !paths.has(entry.path));
+      return snapshot(payload);
+    }
+    return {};
   };
   const props = {
     call,
@@ -274,10 +355,36 @@ async function renderPanel(t, options = {}) {
       selector({ items: [{ workspaceId: 'ws-1', path: MAIN_DIR, sessionIds: ['session-1'] }] }),
   };
   if (options.stored !== undefined) dom.window.localStorage.setItem('dsh-git.repo.ws-1', options.stored);
+  if (options.compact) {
+    const previous = {
+      observer: globalThis.ResizeObserver,
+      frame: globalThis.requestAnimationFrame,
+      cancel: globalThis.cancelAnimationFrame,
+    };
+    globalThis.ResizeObserver = class {
+      constructor(callback) {
+        this.callback = callback;
+      }
+      observe() {
+        this.callback([{ contentRect: { width: 620 } }]);
+      }
+      disconnect() {}
+    };
+    globalThis.requestAnimationFrame = (callback) => {
+      callback(0);
+      return 1;
+    };
+    globalThis.cancelAnimationFrame = () => {};
+    t.after(() => {
+      globalThis.ResizeObserver = previous.observer;
+      globalThis.requestAnimationFrame = previous.frame;
+      globalThis.cancelAnimationFrame = previous.cancel;
+    });
+  }
   const render = () => root.render(React.createElement(body.component, props));
   render();
   await new Promise((resolve) => setTimeout(resolve, 40));
-  return { dom, root, container, calls, store, render };
+  return { dom, root, container, calls, store, state, render };
 }
 
 test('AC-080: the panel sends the Session working directory and opens its worktree', async (t) => {
@@ -368,3 +475,259 @@ test('AC-081: a manual pick survives a move inside the same checkout', async (t)
   );
 });
 
+
+test('AC-082: a modified click adds a second file and opens the batch bar', async (t) => {
+  const panel = await renderPanel(t, {
+    entries: [statusEntry('a.txt'), statusEntry('b.txt'), statusEntry('c.txt')],
+  });
+  await until(() => panel.container.querySelectorAll('.gitp-filerow').length === 3, 'three rows render');
+  const rows = () => [...panel.container.querySelectorAll('.gitp-filerow')];
+
+  rows()[0].click();
+  await until(
+    () => panel.container.querySelectorAll('.gitp-filerow.is-selected').length === 1,
+    'one file is selected',
+  );
+  assert.equal(panel.container.querySelector('.gitp-batchbar'), null, 'the bar stays hidden for one file');
+
+  rows()[1].dispatchEvent(new panel.dom.window.MouseEvent('click', { bubbles: true, metaKey: true }));
+  await until(() => panel.container.querySelector('.gitp-batchbar') !== null, 'the batch bar appears');
+  assert.equal(panel.container.querySelectorAll('.gitp-filerow.is-selected').length, 2, 'two files are selected');
+  assert.notEqual(panel.container.querySelector('[aria-label="selection.discard"]'), null, 'Discard is offered');
+  assert.equal(
+    panel.container.querySelector('[aria-label="selection.unstage"]').disabled,
+    true,
+    'Unstage is disabled when no staged file is selected',
+  );
+
+  panel.container.querySelector('[aria-label="selection.clear"]').click();
+  await until(() => panel.container.querySelector('.gitp-batchbar') === null, 'Clear hides the bar');
+  assert.equal(panel.container.querySelectorAll('.gitp-filerow.is-selected').length, 0, 'Clear drops the rows');
+});
+
+test('AC-083: Shift-click selects the inclusive range, and a filter resets it', async (t) => {
+  const panel = await renderPanel(t, {
+    entries: [statusEntry('a.txt'), statusEntry('b.txt'), statusEntry('c.txt')],
+  });
+  await until(() => panel.container.querySelectorAll('.gitp-filerow').length === 3, 'three rows render');
+  const rows = [...panel.container.querySelectorAll('.gitp-filerow')];
+
+  rows[0].click();
+  await until(
+    () => panel.container.querySelectorAll('.gitp-filerow.is-selected').length === 1,
+    'the first file is selected',
+  );
+  rows[2].dispatchEvent(new panel.dom.window.MouseEvent('click', { bubbles: true, shiftKey: true }));
+  await until(
+    () => panel.container.querySelectorAll('.gitp-filerow.is-selected').length === 3,
+    'the range selects three files',
+  );
+  assert.notEqual(panel.container.querySelector('.gitp-batchbar'), null, 'the batch bar appears');
+  assert.equal(panel.container.querySelector('.gitp-batch-count').textContent, 'selection.count');
+
+  const input = panel.container.querySelector('.gitp-filter-box input');
+  const setValue = Object.getOwnPropertyDescriptor(panel.dom.window.HTMLInputElement.prototype, 'value').set;
+  setValue.call(input, 'a');
+  input.dispatchEvent(new panel.dom.window.Event('input', { bubbles: true }));
+  await until(() => panel.container.querySelector('.gitp-batchbar') === null, 'the filter clears the batch');
+  assert.equal(
+    panel.container.querySelectorAll('.gitp-filerow.is-selected').length,
+    0,
+    'the hidden picks are dropped',
+  );
+});
+
+test('AC-084: Stage sends every selected unstaged path and clears the batch', async (t) => {
+  const panel = await renderPanel(t, {
+    entries: [statusEntry('a.txt', { kind: 'renamed', from: 'old-a.txt' }), statusEntry('b.txt'), statusEntry('c.txt')],
+  });
+  await until(() => panel.container.querySelectorAll('.gitp-filerow').length === 3, 'three rows render');
+  const rows = () => [...panel.container.querySelectorAll('.gitp-filerow')];
+
+  rows()[0].click();
+  await until(
+    () => panel.container.querySelectorAll('.gitp-filerow.is-selected').length === 1,
+    'the first file is selected',
+  );
+  rows()[1].dispatchEvent(new panel.dom.window.MouseEvent('click', { bubbles: true, metaKey: true }));
+  await until(() => panel.container.querySelector('.gitp-batchbar') !== null, 'the batch bar appears');
+
+  panel.container.querySelector('[aria-label="selection.stage"]').click();
+  await until(() => panel.calls.some((entry) => entry.endpoint === 'stage'), 'the stage request is sent');
+  const stageCall = panel.calls.find((entry) => entry.endpoint === 'stage');
+  assert.deepEqual(stageCall.payload.paths, ['a.txt', 'old-a.txt', 'b.txt']);
+  assert.equal(stageCall.payload.workspaceId, 'ws-1');
+
+  await until(() => panel.container.querySelector('.gitp-batchbar') === null, 'the action clears the batch');
+  assert.equal(
+    panel.container.querySelectorAll('.gitp-filerow.is-selected').length,
+    0,
+    'the action clears the row highlight',
+  );
+  assert.equal(panel.state.entries.find((entry) => entry.path === 'a.txt').staged, true);
+  assert.equal(panel.state.entries.find((entry) => entry.path === 'b.txt').staged, true);
+  assert.equal(panel.state.entries.find((entry) => entry.path === 'c.txt').staged, false);
+});
+
+test('AC-085: Unstage sends every selected staged path and clears the batch', async (t) => {
+  const panel = await renderPanel(t, {
+    entries: [
+      statusEntry('a.txt', { staged: true, unstaged: false, worktree: ' ' }),
+      statusEntry('b.txt', { staged: true, unstaged: false, worktree: ' ' }),
+    ],
+  });
+  await until(() => panel.container.querySelectorAll('.gitp-filerow').length === 2, 'two rows render');
+  const rows = [...panel.container.querySelectorAll('.gitp-filerow')];
+
+  rows[0].click();
+  await until(
+    () => panel.container.querySelectorAll('.gitp-filerow.is-selected').length === 1,
+    'the first file is selected',
+  );
+  rows[1].dispatchEvent(new panel.dom.window.MouseEvent('click', { bubbles: true, metaKey: true }));
+  await until(() => panel.container.querySelector('.gitp-batchbar') !== null, 'the batch bar appears');
+
+  panel.container.querySelector('[aria-label="selection.unstage"]').click();
+  await until(() => panel.calls.some((entry) => entry.endpoint === 'unstage'), 'the unstage request is sent');
+  const unstageCall = panel.calls.find((entry) => entry.endpoint === 'unstage');
+  assert.deepEqual(unstageCall.payload.paths, ['a.txt', 'b.txt']);
+
+  await until(() => panel.container.querySelector('.gitp-batchbar') === null, 'the action clears the batch');
+  assert.equal(panel.state.entries.find((entry) => entry.path === 'a.txt').staged, false);
+  assert.equal(panel.state.entries.find((entry) => entry.path === 'b.txt').staged, false);
+});
+
+test('AC-086: Discard confirms the set; a conflict click keeps the picks', async (t) => {
+  const panel = await renderPanel(t, {
+    entries: [
+      statusEntry('conflict.txt', {
+        kind: 'unmerged',
+        index: 'U',
+        worktree: 'U',
+        letter: 'U',
+        conflicted: true,
+        staged: true,
+      }),
+      statusEntry('staged.txt', { staged: true, unstaged: false, worktree: ' ' }),
+      statusEntry('local.txt'),
+    ],
+  });
+  await until(() => panel.container.querySelectorAll('.gitp-filerow').length === 3, 'three rows render');
+  const rows = () => [...panel.container.querySelectorAll('.gitp-filerow')];
+
+  rows()[1].click();
+  await until(
+    () => panel.container.querySelectorAll('.gitp-filerow.is-selected').length === 1,
+    'the staged file is selected',
+  );
+  rows()[2].dispatchEvent(new panel.dom.window.MouseEvent('click', { bubbles: true, metaKey: true }));
+  await until(() => panel.container.querySelector('.gitp-batchbar') !== null, 'the batch bar appears');
+
+  rows()[0].dispatchEvent(new panel.dom.window.MouseEvent('click', { bubbles: true, metaKey: true }));
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.notEqual(panel.container.querySelector('.gitp-batchbar'), null, 'the conflict click keeps the batch');
+  assert.equal(
+    panel.container.querySelectorAll('.gitp-filerow.is-selected').length,
+    2,
+    'the two picks survive the conflict click',
+  );
+
+  assert.equal(
+    panel.calls.filter((entry) => entry.endpoint === 'discard').length,
+    0,
+    'nothing is discarded before the confirmation',
+  );
+  panel.container.querySelector('[aria-label="selection.discard"]').click();
+  await until(() => panel.container.querySelector('.gitp-modal-title') !== null, 'the confirmation opens');
+  assert.equal(panel.container.querySelector('.gitp-modal-title').textContent, 'discard.titleMany');
+  assert.deepEqual(
+    [...panel.container.querySelectorAll('.gitp-confirm-paths li')].map((item) => item.textContent),
+    ['staged.txt', 'local.txt'],
+  );
+
+  panel.container.querySelector('.gitp-modal-actions .is-danger').click();
+  await until(() => panel.calls.some((entry) => entry.endpoint === 'discard'), 'the discard request is sent');
+  const discardCall = panel.calls.find((entry) => entry.endpoint === 'discard');
+  assert.deepEqual(discardCall.payload.paths, ['staged.txt', 'local.txt']);
+  assert.equal(discardCall.payload.confirm, true);
+  await until(() => panel.container.querySelector('.gitp-batchbar') === null, 'the action clears the batch');
+  assert.deepEqual(panel.state.entries.map((entry) => entry.path), ['conflict.txt']);
+});
+
+test('AC-087: the bar hides below two picks and each control names itself', async (t) => {
+  const panel = await renderPanel(t, {
+    entries: [
+      statusEntry('a.txt', { staged: true, unstaged: false, worktree: ' ' }),
+      statusEntry('d.txt', { staged: true, unstaged: false, worktree: ' ' }),
+      statusEntry('b.txt'),
+    ],
+  });
+  await until(() => panel.container.querySelectorAll('.gitp-filerow').length === 3, 'three rows render');
+  const rows = () => [...panel.container.querySelectorAll('.gitp-filerow')];
+
+  assert.equal(panel.container.querySelector('.gitp-batchbar'), null, 'the bar hides with no selection');
+  rows()[0].click();
+  await until(
+    () => panel.container.querySelectorAll('.gitp-filerow.is-selected').length === 1,
+    'one staged file is selected',
+  );
+  assert.equal(panel.container.querySelector('.gitp-batchbar'), null, 'the bar hides with one pick');
+
+  rows()[1].dispatchEvent(new panel.dom.window.MouseEvent('click', { bubbles: true, metaKey: true }));
+  await until(() => panel.container.querySelector('.gitp-batchbar') !== null, 'the batch bar appears');
+  assert.equal(panel.container.querySelector('[aria-label="selection.stage"]').disabled, true);
+  assert.equal(panel.container.querySelector('[aria-label="selection.unstage"]').disabled, false);
+  const buttons = [...panel.container.querySelectorAll('.gitp-batch-btn')];
+  assert.equal(buttons.length, 4, 'the bar has four controls');
+  for (const button of buttons) {
+    assert.equal(button.title, button.getAttribute('aria-label'));
+    assert.notEqual(button.getAttribute('aria-label'), null);
+  }
+  assert.equal(rows()[0].getAttribute('aria-pressed'), 'true');
+});
+
+test('AC-088: compact mode keeps the list while a batch is selected', async (t) => {
+  const panel = await renderPanel(t, {
+    compact: true,
+    entries: [statusEntry('a.txt'), statusEntry('b.txt')],
+  });
+  await until(() => panel.container.querySelectorAll('.gitp-filerow').length === 2, 'rows render in compact');
+  const rowAt = (index) => panel.container.querySelectorAll('.gitp-filerow')[index];
+  assert.notEqual(panel.container.querySelector('.gitp-listcol'), null, 'the list starts visible');
+
+  rowAt(0).dispatchEvent(new panel.dom.window.MouseEvent('click', { bubbles: true, metaKey: true }));
+  await until(
+    () => panel.container.querySelector('.gitp-listcol') !== null,
+    'the list stays after a modified click',
+  );
+  rowAt(1).dispatchEvent(new panel.dom.window.MouseEvent('click', { bubbles: true, metaKey: true }));
+  await until(() => panel.container.querySelector('.gitp-batchbar') !== null, 'the bar appears in compact');
+  assert.notEqual(panel.container.querySelector('.gitp-listcol'), null, 'the list stays visible');
+  assert.equal(panel.container.querySelector('.gitp-diffcol'), null, 'the diff does not take the pane');
+
+  panel.container.querySelector('[aria-label="selection.stage"]').click();
+  await until(() => panel.container.querySelector('.gitp-batchbar') === null, 'the action clears the batch');
+  assert.notEqual(panel.container.querySelector('.gitp-listcol'), null, 'the list remains after the action');
+});
+
+test('AC-089: Ctrl+Space toggles rows from the keyboard', async (t) => {
+  const panel = await renderPanel(t, {
+    entries: [statusEntry('a.txt'), statusEntry('b.txt')],
+  });
+  await until(() => panel.container.querySelectorAll('.gitp-filerow').length === 2, 'two rows render');
+  const rows = () => [...panel.container.querySelectorAll('.gitp-filerow')];
+
+  rows()[0].focus();
+  rows()[0].dispatchEvent(
+    new panel.dom.window.KeyboardEvent('keydown', { key: ' ', bubbles: true, ctrlKey: true }),
+  );
+  await until(
+    () => panel.container.querySelectorAll('.gitp-filerow.is-selected').length === 1,
+    'the first row toggles from the keyboard',
+  );
+  rows()[1].dispatchEvent(
+    new panel.dom.window.KeyboardEvent('keydown', { key: ' ', bubbles: true, ctrlKey: true }),
+  );
+  await until(() => panel.container.querySelector('.gitp-batchbar') !== null, 'the bar appears from the keyboard');
+  assert.equal(panel.container.querySelectorAll('.gitp-filerow.is-selected').length, 2);
+});

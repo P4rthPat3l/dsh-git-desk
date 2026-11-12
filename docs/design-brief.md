@@ -131,6 +131,11 @@ Diff tints are `color-mix` of the semantic token with transparency, so the host 
 | Action | Result |
 | --- | --- |
 | Click a file | Select it, remember its section, render its diff, reset change position |
+| Cmd/Ctrl-click a file | Add or remove it from the batch selection |
+| Shift-click a file | Select the range in that section from the last clicked file |
+| Batch bar, two or more files | Stage, unstage, or discard the selection, or clear it |
+| Tab, Enter, Space | Move to a row; Enter or Space opens it, Ctrl/Cmd+Space toggles it in the batch, Shift+Space extends the range |
+| Compact pane, modified click | Keeps the list and the batch bar on screen |
 | Click `+` on an unstaged row | Stage the file, move it to Staged, show its staged diff |
 | Click `−` on a staged row | Unstage the file, move it to Unstaged |
 | Click a section header | Collapse or expand Staged, Unstaged, or Conflicts |
@@ -210,6 +215,8 @@ DEC-019. A branch and commit shortcut generates the branch name from the message
 DEC-020. Sync controls and counters appear once, in the header toolbar: fetch, pull with the behind count, push with the ahead count. The branch chip and the status bar carry no duplicate counters. Reason: three copies of the same number read as three different facts.
 
 DEC-021. No custom hover tooltips and no new keyboard shortcuts in v1. Icon-only controls use the native `title` tooltip, which cannot be clipped by the narrow pane and needs no overlay code. Reason: the user asked for shortcuts to stay untouched, and an unbound key is better than a colliding one.
+
+DEC-022. Multi-select uses modifier clicks, not checkboxes. Cmd-click, Ctrl-click, or Ctrl/Cmd+Space toggles a file; Shift-click or Shift+Space selects a range in one section; a batch bar appears at two or more files with Stage, Unstage, Discard, and Clear. In the compact layout a modifier click keeps the list on screen so the bar stays reachable. Reason: DEC-002 keeps the row about the file, and a checkbox on every row is a second selection state that also has to explain conflicts and files in both sections. The row and section controls stay for one file.
 
 ## Not in v1
 
