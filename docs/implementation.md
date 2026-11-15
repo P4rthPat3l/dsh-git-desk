@@ -97,7 +97,7 @@ Every write returns a fresh status snapshot. The client renders only from that s
 | `checkout` | `workspaceId`, `repo`, `branch`, `remote` | Output, status |
 | `stashList`, `stashPush`, `stashApply`, `stashDrop` | Selection | Stashes and status |
 | `resolve` | `workspaceId`, `repo`, `path`, `side` | Status |
-| `aiMessage` | `workspaceId`, `repo`, optional `model: { provider, model }`, optional `instruction` | `{ message, provider, model }`, where `message` is a title plus an optional body |
+| `aiMessage` | `workspaceId`, `repo`, `sessionId`, optional `model: { provider, model }`, optional `instruction` | `{ message, provider, model }`, where `message` is a title plus an optional body; `sessionId` reaches the model service as a routing field |
 | `preferences` | none, no workspace needed | `{ instruction, groups: [{ id, label, models: [{ id, name }] }] }` |
 
 ## Verified

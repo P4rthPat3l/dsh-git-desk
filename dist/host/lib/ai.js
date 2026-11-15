@@ -234,6 +234,7 @@ export async function writeCommitMessage(ctx, request) {
             messages: [{ role: 'user', content: [{ type: 'text', text: promptFor(request.recent, request.patch) }] }],
             temperature: 0.2,
             maxTokens: 200,
+            ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
             signal: request.signal,
         });
         for await (const chunk of chunks) {

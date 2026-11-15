@@ -30,6 +30,8 @@ import type {
   UseTabInfo,
   WorkspaceState,
 } from './harness.js';
+import { useHighlightedDiff } from './highlight-host.js';
+import type { HighlightedSides, TokenSpan } from './highlight-host.js';
 
 const h = React.createElement;
 
@@ -425,6 +427,7 @@ const EN = {
   'command.notReady': 'Stage a file and write a message first',
   'split.files': 'Resize the file list',
   'split.commits': 'Resize the commit list',
+  'split.panes': 'Resize the diff panes',
 };
 
 const ZH = {
@@ -688,6 +691,7 @@ const ZH = {
   'command.notReady': '请先暂存文件并填写提交信息',
   'split.files': '调整文件列表宽度',
   'split.commits': '调整提交列表宽度',
+  'split.panes': '调整并排差异的宽度',
 };
 
 const STORE_LAYOUT = 'dsh-git.layout';
@@ -810,14 +814,18 @@ const SPLIT_DIFF_MIN = 280;
 const SPLIT_MAX = 10_000;
 const SPLIT_STEP = 16;
 
-function readSplit() {
-  const raw = Number.parseInt(readStore(STORE_SPLIT, ''), 10);
-  if (!Number.isFinite(raw)) return SPLIT_DEFAULT;
-  return Math.min(Math.max(raw, SPLIT_MIN), SPLIT_MAX);
+interface NumberStore {
+  get(): number;
+  subscribe(listener: () => void): () => void;
+  set(next: number): void;
 }
 
-const split = (() => {
-  let current = readSplit();
+function createNumberStore(key: string, fallback: number, normalize: (value: number) => number): NumberStore {
+  const read = (): number => {
+    const raw = Number.parseFloat(readStore(key, ''));
+    return Number.isFinite(raw) ? normalize(raw) : fallback;
+  };
+  let current = read();
   const listeners = new Set<() => void>();
   return {
     get: (): number => current,
@@ -828,22 +836,58 @@ const split = (() => {
       };
     },
     set(next: number): void {
-      const value = Math.round(next);
-      if (!Number.isFinite(value) || value === current) return;
-      current = Math.min(Math.max(value, SPLIT_MIN), SPLIT_MAX);
-      writeStore(STORE_SPLIT, String(current));
+      if (!Number.isFinite(next)) return;
+      const value = normalize(next);
+      if (value === current) return;
+      current = value;
+      writeStore(key, String(value));
       for (const listener of [...listeners]) listener();
     },
   };
-})();
+}
+
+const split = createNumberStore(STORE_SPLIT, SPLIT_DEFAULT, (value) =>
+  Math.min(Math.max(Math.round(value), SPLIT_MIN), SPLIT_MAX),
+);
+
+// Share of the split diff the left pane takes. A ratio survives a panel
+// resize the way a fixed pixel width would not.
+const STORE_DIFF_SPLIT = 'dsh-git.diffsplit';
+const DIFF_SPLIT_DEFAULT = 0.5;
+const DIFF_SPLIT_STEP = 0.02;
+const DIFF_SPLIT_PANE_MIN = 120;
+const DIFF_SPLIT_GUTTER = 52;
+
+// Each pane keeps DIFF_SPLIT_PANE_MIN pixels, so a narrow panel cannot
+// collapse one side into nothing. A width of 0 means the container has not
+// been measured yet, and only the 0 to 1 range applies.
+function clampDiffSplit(value: number, width: number): number {
+  const span = Math.round(width) - DIFF_SPLIT_GUTTER;
+  if (span <= 0) return Math.min(Math.max(value, 0), 1);
+  const floor = Math.min(0.45, DIFF_SPLIT_PANE_MIN / span);
+  const ceil = Math.max(0.55, 1 - DIFF_SPLIT_PANE_MIN / span);
+  return Math.min(Math.max(value, floor), ceil);
+}
+
+const diffSplit = createNumberStore(STORE_DIFF_SPLIT, DIFF_SPLIT_DEFAULT, (value) =>
+  Math.round(Math.min(Math.max(value, 0), 1) * 1000) / 1000,
+);
+
+function useNumberStore(store: NumberStore): [number, (next: number) => void] {
+  const [value, setValue] = useState(store.get);
+  useEffect(() => {
+    setValue(store.get());
+    return store.subscribe(() => setValue(store.get()));
+  }, [store]);
+  return [value, store.set];
+}
 
 function useSplitWidth(): [number, (next: number) => void] {
-  const [value, setValue] = useState(split.get);
-  useEffect(() => {
-    setValue(split.get());
-    return split.subscribe(() => setValue(split.get()));
-  }, []);
-  return [value, split.set];
+  return useNumberStore(split);
+}
+
+function useDiffSplit(): [number, (next: number) => void] {
+  return useNumberStore(diffSplit);
 }
 
 // A multi-line field that shows its whole message: the height follows the
@@ -995,9 +1039,94 @@ function wordParts(left: string, right: string): WordParts | null {
   };
 }
 
-function renderParts(prefix: string, middle: string, suffix: string): React.ReactNode {
-  if (middle === '') return h(React.Fragment, null, prefix, suffix);
-  return h(React.Fragment, null, prefix, h('span', { className: 'gitp-word' }, middle), suffix);
+/** The character range of one line that the word diff marks as changed. */
+interface Emphasis {
+  from: number;
+  to: number;
+}
+
+/** One run of one line, after the word diff has cut the tokens. */
+interface Segment {
+  text: string;
+  token: string | null;
+  word: boolean;
+}
+
+/**
+ * Cut the tokens of one line at the changed range, so a changed middle keeps
+ * its colors inside the word-diff background.
+ * @param tokens the line's tokens.
+ * @param emphasis the changed range, or null when nothing is marked.
+ * @returns the runs in source order.
+ */
+function cutSegments(tokens: TokenSpan[], emphasis: Emphasis | null): Segment[] {
+  const segments: Segment[] = [];
+  let offset = 0;
+  for (const token of tokens) {
+    const start = offset;
+    const end = start + token.text.length;
+    offset = end;
+    if (emphasis === null || emphasis.to <= emphasis.from) {
+      segments.push({ text: token.text, token: token.token, word: false });
+      continue;
+    }
+    const from = Math.max(0, Math.min(token.text.length, emphasis.from - start));
+    const to = Math.max(from, Math.min(token.text.length, emphasis.to - start));
+    for (const [text, word] of [
+      [token.text.slice(0, from), false],
+      [token.text.slice(from, to), true],
+      [token.text.slice(to), false],
+    ] as const) {
+      if (text !== '') segments.push({ text, token: token.token, word });
+    }
+  }
+  return segments;
+}
+
+/**
+ * Render one code line from its tokens, wrapping the changed range in the
+ * word-diff span. Adjacent changed runs share one span so the background is
+ * continuous.
+ * @param tokens the line's tokens, or null to render the text plainly.
+ * @param text the line text, used when no tokens were built.
+ * @param emphasis the changed range, or null.
+ * @returns the line content.
+ */
+function renderCode(tokens: TokenSpan[] | null, text: string, emphasis: Emphasis | null): React.ReactNode {
+  const segments = cutSegments(tokens ?? [{ text, token: null }], emphasis);
+  if (segments.length === 0) return '\u00a0';
+  const nodes: React.ReactNode[] = [];
+  let word: React.ReactNode[] = [];
+  const flush = (): void => {
+    if (word.length === 0) return;
+    nodes.push(h('span', { className: 'gitp-word', key: `w${nodes.length}` }, word));
+    word = [];
+  };
+  segments.forEach((segment, index) => {
+    const node =
+      segment.token === null
+        ? h('span', { key: `s${index}` }, segment.text)
+        : h('span', { className: segment.token, key: `s${index}` }, segment.text);
+    if (segment.word) {
+      word.push(node);
+      return;
+    }
+    flush();
+    nodes.push(node);
+  });
+  flush();
+  return nodes;
+}
+
+/**
+ * Read one line's tokens.
+ * @param side the side's per-line tokens, or null when the side renders plain.
+ * @param line the 1-based line number, or null for a blank row.
+ * @returns the tokens, or null for plain text.
+ */
+function tokensOf(side: TokenSpan[][] | null, line: number | null): TokenSpan[] | null {
+  if (side === null || line === null) return null;
+  return side[line - 1] ?? null;
 }
 
 function relativeDate(value: string): string {
@@ -1275,8 +1404,10 @@ button[data-forge-header]{display:none}
 .gitp-pane-heads{display:flex;flex:none;height:28px;border-bottom:1px solid var(--dsw-alias-border-l1);font-size:12px;color:var(--dsw-alias-label-tertiary)}
 .gitp-pane-head{display:flex;align-items:center;flex:1;min-width:0;padding:0 12px;font-weight:500}
 .gitp-pane-head-gutter{width:52px;flex:none;border-left:1px solid var(--dsw-alias-border-l1);border-right:1px solid var(--dsw-alias-border-l1)}
+.gitp-split{display:flex;flex-direction:column;flex:1;min-height:0;min-width:0}
 .gitp-panes{display:flex;flex:1;min-height:0;position:relative}
 .gitp-pane{flex:1;min-width:0;overflow:auto;font-family:var(--gitp-mono);font-size:12px;line-height:20px}
+.gitp-pane-resizer{z-index:2}
 .gitp-gutter{position:relative;width:52px;flex:none;overflow:hidden;border-left:1px solid var(--dsw-alias-border-l1);border-right:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base);z-index:1}
 .gitp-gutter-inner{position:absolute;top:0;left:0;right:0;will-change:transform}
 .gitp-arrows{position:absolute;left:0;right:0;height:20px;display:flex;align-items:center;justify-content:center;gap:2px}
@@ -1295,6 +1426,19 @@ button[data-forge-header]{display:none}
 .gitp-line.is-blank .gitp-ln{background:var(--dsw-alias-bg-base)}
 .gitp-line.is-add .gitp-word,.gitp-urow.is-add .gitp-word{background:color-mix(in srgb,var(--dsw-alias-file-diff-added-marker,var(--dsw-alias-state-success-primary)) 32%,transparent);border-radius:3px}
 .gitp-line.is-del .gitp-word,.gitp-urow.is-del .gitp-word{background:color-mix(in srgb,var(--dsw-alias-file-diff-deleted-marker,var(--dsw-alias-state-error-primary)) 32%,transparent);border-radius:3px}
+.gitp-hl-keyword{color:var(--shiki-token-keyword,inherit)}
+.gitp-hl-string{color:var(--shiki-token-string,inherit)}
+.gitp-hl-number{color:var(--shiki-token-constant,inherit)}
+.gitp-hl-comment{color:var(--shiki-token-comment,inherit);font-style:italic}
+.gitp-hl-function{color:var(--shiki-token-function,inherit)}
+.gitp-hl-type{color:var(--shiki-token-constant,inherit)}
+.gitp-hl-operator{color:var(--shiki-token-punctuation,inherit)}
+.gitp-hl-meta{color:var(--shiki-token-parameter,inherit)}
+.gitp-hl-invalid{color:var(--dsw-alias-state-error-primary);text-decoration:underline}
+.gitp-hl-link{color:var(--shiki-token-link,inherit);text-decoration:underline}
+.gitp-hl-heading{font-weight:600;color:var(--dsw-alias-label-primary)}
+.gitp-hl-emphasis{font-style:italic}
+.gitp-hl-strong{font-weight:700}
 .gitp-unified{flex:1;min-height:0;overflow:auto;font-family:var(--gitp-mono);font-size:12px;line-height:20px}
 .gitp-uarrows{position:sticky;left:0;width:52px;flex:none;display:flex;align-items:center;justify-content:center;gap:2px;background:var(--dsw-alias-bg-base);z-index:2}
 .gitp-urow.is-conflict-marker{background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 14%,transparent);color:var(--dsw-alias-state-error-primary);font-weight:600}
@@ -2715,6 +2859,7 @@ function DiffView({
 }: DiffViewProps) {
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const [changeNav, setChangeNav] = useState({ index: -1, canPrev: false, canNext: false });
+  const tokens = useHighlightedDiff(diff);
   const blocks = useMemo(() => {
     if (diff === null) return [];
     return [...(diff.blocks ?? [])].sort((left, right) => left.row - right.row);
@@ -2998,8 +3143,8 @@ function DiffView({
       : diff.conflict
         ? h(ConflictDiff, { diff })
         : layout === 'unified'
-          ? h(UnifiedDiff, { t, diff, onBlock, busy, selectionKey, renamed })
-          : h(SplitDiff, { t, diff, labels, onBlock, busy, selectionKey, renamed }),
+          ? h(UnifiedDiff, { t, diff, tokens, onBlock, busy, selectionKey, renamed })
+          : h(SplitDiff, { t, diff, labels, tokens, onBlock, busy, selectionKey, renamed }),
     !diff.binary && !diff.conflict
       ? h(
           'div',
@@ -3042,16 +3187,34 @@ interface SplitDiffProps {
   t: Translator;
   diff: DiffPayload;
   labels: { left: string; right: string };
+  tokens: HighlightedSides;
   onBlock: (block: DiffBlock, side: string) => void;
   busy: boolean;
   selectionKey: string;
   renamed: boolean;
 }
 
-function SplitDiff({ t, diff, labels, onBlock, busy, selectionKey, renamed }: SplitDiffProps) {
+function SplitDiff({ t, diff, labels, tokens, onBlock, busy, selectionKey, renamed }: SplitDiffProps) {
   const leftRef = useRef<HTMLDivElement | null>(null);
   const rightRef = useRef<HTMLDivElement | null>(null);
   const gutterRef = useRef<HTMLDivElement | null>(null);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const leftHeadRef = useRef<HTMLDivElement | null>(null);
+  const rightHeadRef = useRef<HTMLDivElement | null>(null);
+  const [ratio, setRatio] = useDiffSplit();
+
+  const resize = (next: number): void => {
+    if (leftHeadRef.current !== null) leftHeadRef.current.style.flexGrow = String(next);
+    if (rightHeadRef.current !== null) rightHeadRef.current.style.flexGrow = String(1 - next);
+    if (leftRef.current !== null) leftRef.current.style.flexGrow = String(next);
+    if (rightRef.current !== null) rightRef.current.style.flexGrow = String(1 - next);
+  };
+
+  // React never writes flex-grow on these panes, so a drag that changes it
+  // straight in the DOM survives a re-render from the status poll.
+  useEffect(() => {
+    resize(ratio);
+  }, [ratio]);
 
   const moveGutter = (top: number): void => {
     if (gutterRef.current) gutterRef.current.style.transform = `translateY(${-top}px)`;
@@ -3103,14 +3266,14 @@ function SplitDiff({ t, diff, labels, onBlock, busy, selectionKey, renamed }: Sp
   };
 
   return h(
-    React.Fragment,
-    null,
+    'div',
+    { className: 'gitp-split', ref: wrapRef },
     h(
       'div',
       { className: 'gitp-pane-heads' },
-      h('div', { className: 'gitp-pane-head' }, labels.left),
+      h('div', { className: 'gitp-pane-head', ref: leftHeadRef }, labels.left),
       h('div', { className: 'gitp-pane-head-gutter' }),
-      h('div', { className: 'gitp-pane-head' }, labels.right),
+      h('div', { className: 'gitp-pane-head', ref: rightHeadRef }, labels.right),
     ),
     h(
       'div',
@@ -3138,9 +3301,11 @@ function SplitDiff({ t, diff, labels, onBlock, busy, selectionKey, renamed }: Sp
               { className: 'gitp-code' },
               row.l === null
                 ? '\u00a0'
-                : part
-                  ? renderParts(part.lPre, part.lMid, part.lSuf)
-                  : text || '\u00a0',
+                : renderCode(
+                    tokensOf(tokens.left, row.l),
+                    text,
+                    part ? { from: part.lPre.length, to: part.lPre.length + part.lMid.length } : null,
+                  ),
             ),
           );
         }),
@@ -3176,6 +3341,13 @@ function SplitDiff({ t, diff, labels, onBlock, busy, selectionKey, renamed }: Sp
           }),
         ),
       ),
+      h(PaneResizer, {
+        label: t('split.panes'),
+        wrapRef,
+        ratio,
+        onChange: setRatio,
+        onDrag: resize,
+      }),
       h(
         'div',
         {
@@ -3199,9 +3371,11 @@ function SplitDiff({ t, diff, labels, onBlock, busy, selectionKey, renamed }: Sp
               { className: 'gitp-code' },
               row.r === null
                 ? '\u00a0'
-                : part
-                  ? renderParts(part.rPre, part.rMid, part.rSuf)
-                  : text || '\u00a0',
+                : renderCode(
+                    tokensOf(tokens.right, row.r),
+                    text,
+                    part ? { from: part.rPre.length, to: part.rPre.length + part.rMid.length } : null,
+                  ),
             ),
           );
         }),
@@ -3210,9 +3384,103 @@ function SplitDiff({ t, diff, labels, onBlock, busy, selectionKey, renamed }: Sp
   );
 }
 
+// Drag the divider between the two diff panes. A drag writes flex-grow
+// straight to the panes so a large diff does not re-render on every pointer
+// move; the store learns the share once, on release. The hairline, the 8px
+// grab area, the hover line, and the focus ring are the ones the list and
+// diff columns already use.
+interface PaneResizerProps {
+  label: string;
+  wrapRef: React.RefObject<HTMLDivElement | null>;
+  ratio: number;
+  onChange: (next: number) => void;
+  onDrag: (next: number) => void;
+}
+
+function PaneResizer({ label, wrapRef, ratio, onChange, onDrag }: PaneResizerProps) {
+  const drag = useRef<{ x: number; ratio: number; next: number } | null>(null);
+
+  const width = (): number => {
+    const wrap = wrapRef.current;
+    return wrap === null ? 0 : Math.round(wrap.getBoundingClientRect().width);
+  };
+
+  const clamp = (next: number): number => clampDiffSplit(next, width());
+
+  useEffect(
+    () => () => {
+      drag.current = null;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    },
+    [],
+  );
+
+  return h('div', {
+    className: 'gitp-resizer gitp-pane-resizer',
+    role: 'separator',
+    'aria-orientation': 'vertical',
+    'aria-label': label,
+    'aria-valuemin': 0,
+    'aria-valuemax': 100,
+    'aria-valuenow': Math.round(ratio * 100),
+    tabIndex: 0,
+    onPointerDown(event) {
+      if (event.button !== 0) return;
+      drag.current = { x: event.clientX, ratio, next: ratio };
+      event.currentTarget.setPointerCapture(event.pointerId);
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      event.preventDefault();
+    },
+    onPointerMove(event) {
+      const state = drag.current;
+      if (state === null) return;
+      const span = width() - DIFF_SPLIT_GUTTER;
+      if (span <= 0) return;
+      const next = clamp(state.ratio + (event.clientX - state.x) / span);
+      if (next === state.next) return;
+      state.next = next;
+      onDrag(next);
+      event.currentTarget.setAttribute('aria-valuenow', String(Math.round(next * 100)));
+    },
+    onPointerUp(event) {
+      const state = drag.current;
+      if (state === null) return;
+      drag.current = null;
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      onChange(state.next);
+    },
+    onPointerCancel() {
+      drag.current = null;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    },
+    onDoubleClick() {
+      onChange(clamp(DIFF_SPLIT_DEFAULT));
+    },
+    onKeyDown(event) {
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+        event.preventDefault();
+        onChange(clamp(ratio + (event.key === 'ArrowRight' ? DIFF_SPLIT_STEP : -DIFF_SPLIT_STEP)));
+        return;
+      }
+      if (event.key === 'Home') {
+        event.preventDefault();
+        onChange(clamp(DIFF_SPLIT_DEFAULT));
+      }
+    },
+  });
+}
+
 interface UnifiedDiffProps {
   t: Translator;
   diff: DiffPayload;
+  tokens: HighlightedSides;
   onBlock: (block: DiffBlock, side: string) => void;
   busy: boolean;
   selectionKey: string;
@@ -3227,7 +3495,7 @@ interface UnifiedLine {
   block?: DiffBlock;
 }
 
-function UnifiedDiff({ t, diff, onBlock, busy, selectionKey, renamed }: UnifiedDiffProps) {
+function UnifiedDiff({ t, diff, tokens, onBlock, busy, selectionKey, renamed }: UnifiedDiffProps) {
   const lines = useMemo(() => {
     const blockByRow = new Map<number, DiffBlock>();
     for (const block of diff.blocks) blockByRow.set(block.row, block);
@@ -3296,7 +3564,11 @@ function UnifiedDiff({ t, diff, onBlock, busy, selectionKey, renamed }: UnifiedD
         ),
         h('span', { className: 'gitp-uno' }, line.l ?? ''),
         h('span', { className: 'gitp-uno' }, line.r ?? ''),
-        h('span', { className: 'gitp-ucontent' }, line.text || '\u00a0'),
+        h(
+          'span',
+          { className: 'gitp-ucontent' },
+          renderCode(tokensOf(line.l !== null ? tokens.left : tokens.right, line.l ?? line.r), line.text, null),
+        ),
       );
     }),
   );
@@ -5441,6 +5713,7 @@ function GitPanel({ call, t, useWorkspaces, useSessions, sessionId, useTabInfo, 
       const result = await call('aiMessage', {
         workspaceId: workspaceId,
         repo: repoRoot,
+        sessionId,
         ...(settings.model === null ? {} : { model: settings.model }),
         ...(settings.instruction.trim() === '' ? {} : { instruction: settings.instruction }),
       });

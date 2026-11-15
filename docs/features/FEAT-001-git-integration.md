@@ -3,7 +3,7 @@ id: FEAT-001
 title: Git integration
 status: active
 implementation_status: shipped_unverified
-version: 0.23.0
+version: 0.24.0
 owners: [Parth Patel]
 created: 2026-11-09
 last_updated: 2026-11-15
@@ -236,6 +236,9 @@ Every command runs with `LC_ALL=C`, `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS
 | `dsh-git/src/host/lib/rpc.ts` | Implemented | Endpoint dispatch, repository validation, workspace resolution |
 | `dsh-git/src/host/lib/http.ts` | Implemented | Authenticated JSON envelope |
 | `dsh-git/client.js` | Implemented | Right-tab body and title, session header button, repository picker, session auto-open, branch menu and new-branch dialog, Start-guide card, compact and wide layouts, split and unified diff, dialogs, locales, styles |
+| `dsh-git/client.highlight.js` | Implemented | Lazy chunk with the CodeMirror grammars and the Lezer tag to token-class mapping |
+| `dsh-git/src/client/highlight-host.ts` | Implemented | Extension table, lazy chunk loader, and the per-diff token hook |
+| `dsh-git/src/client/highlight/entry.ts` | Implemented | The chunk: parser cache, tag highlighter, per-line token builder |
 | `dsh-git/locale/en.json`, `dsh-git/locale/zh.json` | Implemented | Plugin Manager metadata |
 | `dsh-git/icon.png` | Implemented | Plugin Manager icon, approved periwinkle window and branch artwork, 512 × 512 PNG below 256 KiB |
 | `dsh-git/docs/implementation.md` | Implemented | Architecture, endpoints, verification, limits |
@@ -269,6 +272,8 @@ Every command runs with `LC_ALL=C`, `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS
 - BR-025. Pull is fast-forward only even when the repository sets `pull.rebase`. When Git refuses the update because local changes are in the way, the working tree is stashed, the pull is retried, and the stash is popped with the index intact, so staged files stay staged. When an untracked file would be overwritten, every untracked file joins the stash so the pull can proceed; the whole stash is restored or kept. If the pop cannot apply cleanly, the pull stays applied, the stash is kept, and the client reports it.
 - BR-026. Discard changes restores the named files to HEAD in the index and the working tree and removes them from Staged and Unstaged. The request names the exact selected entries; the host expands a rename by its recorded old path. An untracked file is deleted from disk, but an untracked nested repository is left in place and reported. Discarding a rename is refused when another unselected file occupies its old path. The host requires a confirmation, refuses a conflicted file, and refuses while a merge, rebase, revert, or cherry-pick is in progress. There is no local undo.
 - BR-027. The commit box and the branch dialog offer Skip hooks. When it is checked, the host commits with `git commit --no-verify`; otherwise Git hooks run. The option defaults off, is not persisted, and applies to a normal commit, an amend, and a branch and commit. The host only skips hooks when the request asks for it.
+- BR-030. The AI message request carries the Session id as a routing field. It identifies the request to a provider that keeps a session affinity, such as OpenCode Go, and never adds conversation content: the prompt stays the staged patch and the recent subjects.
+- BR-029. A diff line is colored by the CodeMirror grammar for its file suffix, through the host's `--shiki-*` palette, so a file reads the same here and in the Files editor. The grammars live in a lazy chunk: the first paint is plain and the colors arrive when the chunk loads. An unknown or extensionless file, the conflict and binary views, and either side over 4,000 lines or 200,000 characters stay plain. Colors never change a row's text, and the word-diff background keeps the token colors of the changed range.
 - BR-028. The Changes list can select several files. A plain click selects one and collapses the batch; Cmd-click, Ctrl-click, or Ctrl/Cmd+Space toggles one; Shift-click or Shift+Space selects the inclusive range inside one section, following the active filter. Changing the filter clears the batch. A batch bar appears at two or more selected files and offers Stage, Unstage, Discard, and Clear. Stage sends every selected unstaged path, Unstage every selected staged path, and Discard the unique selected paths with `confirm: true`, each in one request; a successful action clears the batch and closes the open diff. A conflicted file cannot join a batch, and a modified click on it does nothing. In the compact layout a modified click keeps the list mounted so the bar stays reachable. The row controls, section controls, and the diff header trash control keep their single-file behavior.
 
 ## 13. Acceptance criteria
@@ -356,13 +361,23 @@ Every command runs with `LC_ALL=C`, `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS
 | AC-087 | The batch bar hides at one or zero selected files. Each control is locale-backed and disables when no selected file supports it. |
 | AC-088 | In the compact layout, a Cmd/Ctrl-click keeps the list mounted, and the batch bar stays reachable without expanding the panel. A successful action returns to the list. |
 | AC-089 | Tab reaches a file row. Enter or Space opens it, Ctrl/Cmd+Space toggles it in the batch, and Shift+Space extends the range. |
+| AC-098 | The split diff draws a draggable divider on the right edge of the center gutter. Dragging moves the boundary live, both pane headings follow it, and each pane keeps at least 120px. |
+| AC-099 | The divider is a focusable separator with the same hairline, 8px grab area, hover line, and focus ring as the list and diff divider. Left and right arrows move it by two percentage points, and Home or a double-click resets it to half. |
+| AC-100 | The share is stored in this browser under `dsh-git.diffsplit`, survives a reload, and does not change the list and diff width. |
+| AC-101 | The unified, conflict, and binary views show no pane divider. |
+| AC-116 | A diff of a supported file renders token spans, and every row still reads exactly as its source line. |
+| AC-117 | On a modified row, the word-diff range keeps the token colors of the text inside it. |
+| AC-118 | The unified diff and a History commit diff highlight through the same tokens, and a theme change recolors them without a re-render. |
+| AC-119 | A known suffix highlights; an unknown or extensionless file, the conflict view, and the binary view stay plain. |
+| AC-120 | A side over 4,000 lines or 200,000 characters renders plain without loading the chunk. |
+| AC-121 | Both AI commit actions send the Session id with the staged patch and the recent subjects, and a provider that routes by session, such as OpenCode Go, answers instead of failing with a missing-session error. A caller without a Session sends no id. |
 
 ## 14. Security and privacy
 
 - SEC-001. Paths are resolved against the session working directory and rejected if they escape it.
 - SEC-002. Commands are argument arrays. No user input is interpolated into a shell.
 - SEC-003. Credentials are never read, logged, or stored. Authentication is delegated to the user's Git credential helper.
-- SEC-004. Diff and commit content may contain secrets. It stays local and is never sent to a model unless the user explicitly asks for a message. The two AI commit actions do exactly that: they send the staged patch and the last five commit subjects to the provider selected in Settings, and nothing else.
+- SEC-004. Diff and commit content may contain secrets. It stays local and is never sent to a model unless the user explicitly asks for a message. The two AI commit actions do exactly that: they send the staged patch and the last five commit subjects to the provider selected in Settings, and nothing else. The Session id travels alongside as a routing header for providers that ask for one; it names the request, not the conversation.
 - SEC-005. Push, pull, and branch checkout are the only network and state-moving operations, and each requires an explicit action.
 - SEC-006. Discard deletes local work. The host requires `confirm: true`, the client names the file in the dialog, and discard is refused for a conflicted file or while a merge, rebase, revert, or cherry-pick is in progress.
 
@@ -401,6 +416,8 @@ Every command runs with `LC_ALL=C`, `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS
 
 Status refresh is debounced by 150ms and invalidated by the host's file watch. Diff parsing happens on the host. The client virtualizes above 2,000 rows. Log pages 100 commits at a time. Images and large binary content are never loaded for a diff.
 
+Syntax colors arrive in a lazy chunk. `client.js` gained the loader, the extension table, and the token renderer, and none of the grammar code: the CodeMirror grammars are in `client.highlight.js`, fetched the first time a diff needs them and kept for the page. Parsing is one Lezer pass per side, cached per diff object, and a side over 4,000 lines or 200,000 characters is never parsed. The split matches the one `dsh-files-desk` uses for its editor.
+
 ## 18. Testing
 
 - Parsers: fixture repos for porcelain v2 and patches, including renames, binary files, CRLF, and no trailing newline.
@@ -412,6 +429,7 @@ Status refresh is debounced by 150ms and invalidated by the host's file watch. D
 - Commit hooks: a failing pre-commit hook blocks a normal commit, Skip hooks commits through it, and branch and commit passes the flag through.
 - Conflicts: a prepared merge conflict, resolve each side, commit.
 - UI: one integration test per acceptance criterion that renders the panel against a stubbed Remote.
+- Highlighting: the client bundle test loads `client.highlight.js` through a stubbed `require.async`, so the token path, the word-diff range, the unified view, the plain fallback, and the size cap run against the real grammars.
 - Visual: the mockup screenshots and the plugin screenshots in `docs/screenshots/`, dark and light.
 
 Exact commands depend on the bundle toolchain and are `Unknown` until the plugin skeleton exists.
@@ -552,9 +570,37 @@ The client sends selected paths to the Git host. The host checks fresh status, r
 
 **Risks.** Git status can change after validation and before Git runs. Renames are refused as the safe fallback. A failed Git stash operation may require inspecting Git's error and the stash list. The feature document predates this change and contains older unverified claims outside this section.
 
+### Split diff pane divider
+
+**Status: Implemented, unverified in the running page.** The client was reviewed in the working tree; the document as a whole has no verified commit.
+
+The split diff places a divider on the right edge of the 52px center gutter, between the change arrows and the right pane. Dragging it changes how much of the width each pane takes. The pane headings slide with the panes, and the change arrows stay in the middle of the gutter.
+
+The divider is the same control as the list and diff divider: a zero-width flex item whose pseudo-element carries the hairline and an 8px grab area, with a hover line and a focus ring. It names itself through `aria-label` and reports its share as a percentage. Arrow keys move it by 0.02, and Home or a double-click resets it to 0.5. Each pane keeps at least 120px, so on a narrow panel the reachable range shrinks to keep both sides usable.
+
+The share is a ratio written to the panes as `flex-grow`, not a pixel width, so a wider panel gives both sides more room. It is stored in this browser under `dsh-git.diffsplit`. A drag writes the ratio straight to the four pane elements so a 5,000-line diff does not re-render on every pointer move; the store learns the value once, on release. The same `createNumberStore` factory now backs both this share and the list width.
+
+**Implementation map.** [Client](../../src/client/main.ts), [client tests](../../tests/client.test.mjs), [README](../../README.md). Generated output is [client bundle](../../client.js).
+
+**Acceptance criteria and tests.**
+
+| ID | Criterion | Verification |
+| --- | --- | --- |
+| AC-098 | The split diff draws a draggable divider on the right edge of the center gutter. Dragging moves the boundary live, both pane headings follow it, and each pane keeps at least 120px. | Client test for the share and both headings; drag itself is the same pointer path the list divider uses, and was not seen in the running page. |
+| AC-099 | The divider is a focusable separator with the same hairline, 8px grab area, hover line, and focus ring as the list and diff divider. Left and right arrows move it by two percentage points, and Home or a double-click resets it to half. | Client test for focus, arrows, Home, and the reported share. |
+| AC-100 | The share is stored in this browser under `dsh-git.diffsplit`, survives a reload, and does not change the list and diff width. | Client test reads the stored value. |
+| AC-101 | The unified, conflict, and binary views show no pane divider. | Client test switches to the unified diff. |
+
+**Validation.** `npm run typecheck`, `npm run build`, and `npm test` pass; the suite reports 58 passing tests, 22 of them client cases. The live authenticated page has not been checked, so the drag, the hover line, and the pane proportions have not been seen rendered.
+
+**Risks.**
+
+- The divider sits on the right edge of the 52px gutter rather than in its middle. The gutter itself is not a drag target, because the change arrows occupy most of it.
+- The 120px floor is applied while dragging and from the keyboard. A stored ratio is not re-clamped when the panel narrows, so a very narrow panel can show one pane under 120px until the divider is moved again.
+
 ## 20. Rollout
 
-Install as a bundle and enable it in Plugins. Open the right sidebar, then the **Git changes** card in the Start guide. No migration and no stored data beyond the two layout preferences.
+Install as a bundle and enable it in Plugins. Open the right sidebar, then the **Git changes** card in the Start guide. No migration. The browser stores the list width, the diff share, the layout choice, the AI preferences, and the repository pick.
 
 ## 21. Risks
 
@@ -580,6 +626,12 @@ These were open during design and are decided for 0.6.0.
 | Start-guide card | A `guide` entry on the `ctx.sidebarRightTabs` type, with the Git mark. |
 
 ## 23. Changelog
+
+- 2026-11-15: the AI commit message request now carries the Session id. OpenCode Go routes each request by that header and refused the commit message with a 400 missing-session error; the request prompt is unchanged.
+
+- 2026-11-15: the diff colors its code. Both sides of a split diff and the unified diff parse with the file's CodeMirror grammar and draw the host's `--shiki-*` token palette, so a file reads the same here as in the Files editor and the native preview. The grammars sit in a lazy `client.highlight.js` chunk, so `client.js` stays near its old size and the colors arrive after the first plain paint. Word-diff ranges keep the colors of the text inside them. An unknown suffix, the conflict and binary views, and a side over 4,000 lines or 200,000 characters render plain.
+
+- 2026-11-15: 0.24.0. The split diff gains a draggable divider between its two panes. Dragging moves the boundary live, both pane headings follow, each pane keeps at least 120px, and the share is stored in this browser under `dsh-git.diffsplit`. Arrow keys move it by two percentage points, Home and double-click reset it to half, and the unified, conflict, and binary views show no divider.
 
 - 2026-11-15: added selected-file Git stash actions in Changes and staged-only selection in Stashes. The host validates exact paths, includes both staged and unstaged changes, and refuses renames and active Git operations.
 
@@ -619,11 +671,13 @@ Status is partial: the core flows work, and the remaining gaps are named rather 
 | Right-sidebar tab type and Start-guide card | Done. The client registers the type, body, and title; the compact and wide layouts are tested. |
 | Status, groups, counts, untracked files | Done. Covered by the host integration run. |
 | Full-file split diff, paired rows, word highlights | Done. Covered by the host run and the client bundle run. |
+| Diff syntax colors | Done in the client bundle test and the build. The live panel was not re-checked in the running app. |
 | Stage and unstage a whole file, or every file in a section | Done. |
 | Previous and next change with a change count | Done. |
 | AI commit message and AI branch and commit | Done. Host call through `ctx.llm`; the model comes from Settings and can be overridden on the Git settings page. |
 | Horizontal mode tabs, two-panel body | Done. |
 | Draggable list and diff divider | Done in both views. Verified with a stub store run; not seen in the running page. |
+| Draggable divider between the split diff panes | Done. Keyboard control and the stored share pass in the client run; the drag and the rendered proportions are not seen in the running page. |
 | History commit actions | Added in 0.18.0. Undo, revert, cherry-pick, and reset sit behind a commit menu with per-row reasons. Host rules are verified against a temporary repository; the menu and reset dialog render under React server rendering; not exercised in the running page. |
 | Stage one unstaged block, unstage one staged block | Done. Index blobs verified in the host run. |
 | Revert one local block with confirmation | Done. Confirmation is required by the host, not only the dialog. |

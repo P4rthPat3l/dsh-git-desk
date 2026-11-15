@@ -283,6 +283,7 @@ async function dispatch(ctx, runtime, endpoint, payload) {
                 signal: AbortSignal.timeout(60_000),
                 model: valueOf(payload, 'model'),
                 instruction: valueOf(payload, 'instruction'),
+                sessionId: optionalString(payload, 'sessionId'),
             });
         }
         default:

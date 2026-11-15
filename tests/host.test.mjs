@@ -7,6 +7,34 @@ test('the host entry exposes the plugin contract', async () => {
   assert.equal(typeof module.apply, 'function');
 });
 
+test('AC-121: the model request carries the Session id for routing', async () => {
+  const { writeCommitMessage } = await import('../dist/host/lib/ai.js');
+  const requests = [];
+  const llm = {
+    listProviders: () => [],
+    listModels: async () => [],
+    stream(request) {
+      requests.push(request);
+      return (async function* chunks() {
+        yield { type: 'text-delta', text: 'chore(repo): tidy the desk' };
+        yield { type: 'finish', reason: { kind: 'stop' } };
+      })();
+    },
+  };
+  const ctx = { get: (name) => (name === 'llm' ? llm : undefined) };
+  const base = {
+    patch: 'diff --git a/a.txt b/a.txt',
+    recent: [],
+    signal: new AbortController().signal,
+    model: { provider: 'opencode-go', model: 'some-model' },
+    instruction: '',
+  };
+  await writeCommitMessage(ctx, { ...base, sessionId: 'session-1' });
+  await writeCommitMessage(ctx, base);
+  assert.equal(requests[0].sessionId, 'session-1');
+  assert.equal('sessionId' in requests[1], false, 'a caller without a Session sends no id');
+});
+
 test('the host registers one prefix route on apply', async () => {
   const module = await import('../dist/host/index.js');
   const routes = [];

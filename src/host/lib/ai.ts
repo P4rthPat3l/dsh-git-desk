@@ -44,6 +44,7 @@ export interface LlmRequest {
   messages: { role: string; content: { type: string; text: string }[] }[];
   temperature: number;
   maxTokens: number;
+  sessionId?: string;
   signal: AbortSignal;
 }
 
@@ -262,6 +263,7 @@ export async function writeCommitMessage(
     signal: AbortSignal;
     model: unknown;
     instruction: unknown;
+    sessionId?: string;
   },
 ): Promise<AiMessage> {
   const llm = ctx.get('llm');
@@ -283,6 +285,7 @@ export async function writeCommitMessage(
       messages: [{ role: 'user', content: [{ type: 'text', text: promptFor(request.recent, request.patch) }] }],
       temperature: 0.2,
       maxTokens: 200,
+      ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
       signal: request.signal,
     });
     for await (const chunk of chunks) {

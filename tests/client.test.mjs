@@ -37,12 +37,24 @@ async function loadBundle() {
   const dom = installDom();
   const source = await fs.readFile(path.join(ROOT, 'client.js'), 'utf8');
   let factory = null;
+  const chunks = new Map();
   dom.window.__ModuleLoader__ = {
     load(config) {
-      factory = config.factory;
+      if (config.chunk === undefined) factory = config.factory;
+      else chunks.set(config.chunk, config.factory);
     },
   };
   const react = nodeRequire('react');
+  const requireModule = () => react;
+  requireModule.async = async (specifier) => {
+    const name = specifier.replace(/^\.\//, '');
+    const chunkSource = await fs.readFile(path.join(ROOT, name), 'utf8');
+    const runChunk = new Function('window', 'document', 'navigator', chunkSource);
+    runChunk(dom.window, dom.window.document, dom.window.navigator);
+    const chunkFactory = chunks.get(name);
+    assert.notEqual(chunkFactory, undefined, `the ${name} chunk registers itself`);
+    return chunkFactory(requireModule);
+  };
   const run = new Function('window', 'document', 'navigator', source);
   run(dom.window, dom.window.document, dom.window.navigator);
   assert.notEqual(factory, null, 'the bundle registers itself with the module loader');
@@ -99,7 +111,7 @@ async function loadBundle() {
     get: () => undefined,
   };
 
-  const module = factory(() => react);
+  const module = factory(requireModule);
   return { dom, module, ctx, tabTypes, slotRegistrations, commands };
 }
 
@@ -318,7 +330,7 @@ async function renderPanel(t, options = {}) {
   const call = async (endpoint, payload) => {
     calls.push({ endpoint, payload });
     if (endpoint === 'status') return worktreeStatus(payload, state.entries);
-    if (endpoint === 'diff') return emptyDiff(payload);
+    if (endpoint === 'diff') return options.diff === undefined ? emptyDiff(payload) : options.diff(payload);
     if (endpoint === 'stage') {
       const paths = new Set(payload.paths);
       state.entries = state.entries.map((entry) =>
@@ -337,6 +349,7 @@ async function renderPanel(t, options = {}) {
       );
       return snapshot(payload);
     }
+    if (endpoint === 'aiMessage') return { message: '', provider: null, model: null };
     if (endpoint === 'stashList') return { stashes: [] };
     if (endpoint === 'stashPush') {
       if (options.stashError) throw new Error('stash failed');
@@ -796,4 +809,195 @@ test('AC-097: Stashes offers staged-only files', async (t) => {
   button.click();
   await until(() => panel.container.querySelector('.gitp-filechecks'), 'stash dialog appears');
   assert.match(panel.container.querySelector('.gitp-filechecks').textContent, /staged.txt/);
+});
+
+test('AC-098 and AC-100: the split diff divider moves from the keyboard and stores its share', async (t) => {
+  const panel = await renderPanel(t, { entries: [statusEntry('a.txt')] });
+  await until(() => panel.container.querySelector('.gitp-filerow'), 'file appears');
+  panel.container.querySelector('.gitp-filerow').click();
+  await until(() => panel.container.querySelector('.gitp-panes'), 'the split diff renders');
+
+  const handles = [...panel.container.querySelectorAll('.gitp-panes [role="separator"]')];
+  assert.equal(handles.length, 1, 'one divider sits between the panes');
+  const handle = handles[0];
+  assert.equal(handle.getAttribute('aria-label'), 'split.panes');
+  assert.equal(handle.getAttribute('aria-valuenow'), '50');
+  assert.equal(handle.tabIndex, 0, 'the divider is focusable');
+  const panes = [...panel.container.querySelectorAll('.gitp-panes .gitp-pane')];
+  assert.deepEqual(
+    panes.map((pane) => pane.style.flexGrow),
+    ['0.5', '0.5'],
+    'the panes start out even',
+  );
+
+  handle.dispatchEvent(new panel.dom.window.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+  await until(
+    () => panel.dom.window.localStorage.getItem('dsh-git.diffsplit') === '0.52',
+    'the share is stored',
+  );
+  assert.equal(handle.getAttribute('aria-valuenow'), '52');
+  assert.deepEqual(
+    panes.map((pane) => pane.style.flexGrow),
+    ['0.52', '0.48'],
+    'both panes follow the divider',
+  );
+
+  handle.dispatchEvent(new panel.dom.window.KeyboardEvent('keydown', { key: 'Home', bubbles: true }));
+  await until(
+    () => panel.dom.window.localStorage.getItem('dsh-git.diffsplit') === '0.5',
+    'Home resets the divider to half',
+  );
+  const heads = [...panel.container.querySelectorAll('.gitp-pane-heads .gitp-pane-head')];
+  assert.deepEqual(
+    heads.map((head) => head.style.flexGrow),
+    ['0.5', '0.5'],
+    'the pane headers follow the same share',
+  );
+});
+
+test('AC-101: the unified diff has no pane divider', async (t) => {
+  const panel = await renderPanel(t, { entries: [statusEntry('a.txt')] });
+  await until(() => panel.container.querySelector('.gitp-filerow'), 'file appears');
+  panel.container.querySelector('.gitp-filerow').click();
+  await until(() => panel.container.querySelector('.gitp-panes'), 'the split diff renders');
+
+  panel.container.querySelector('[aria-label="diff.unified"]').click();
+  await until(() => panel.container.querySelector('.gitp-unified'), 'the unified diff renders');
+  assert.equal(
+    panel.container.querySelector('[role="separator"][aria-label="split.panes"]'),
+    null,
+    'the single pane has no divider',
+  );
+});
+
+/**
+ * Build a TypeScript diff with one changed line, for the highlighting cases.
+ * @param payload the diff request.
+ * @returns the payload.
+ */
+function codeDiff(payload) {
+  return {
+    ...emptyDiff(payload),
+    path: payload.path,
+    left: ['export function total(value: number): number {', '  return value', '}'],
+    right: ['export function total(value: number): number {', '  return value + 1', '}'],
+    rows: [
+      { l: 1, r: 1, k: 'ctx' },
+      { l: 2, r: 2, k: 'mod' },
+      { l: 3, r: 3, k: 'ctx' },
+    ],
+    blocks: [{ id: 'b1', leftStart: 2, leftEnd: 2, rightStart: 2, rightEnd: 2, kind: 'mod', row: 1 }],
+    add: 1,
+    del: 1,
+  };
+}
+
+/** One line long enough that 240 of them pass the highlight size cap. */
+const LONG_LINE = `const value = "${'x'.repeat(880)}";`;
+
+/**
+ * Build a diff whose sides are over the highlight size cap.
+ * @param payload the diff request.
+ * @returns the payload.
+ */
+function longDiff(payload) {
+  const lines = Array.from({ length: 240 }, () => LONG_LINE);
+  return {
+    ...emptyDiff(payload),
+    path: payload.path,
+    left: lines,
+    right: lines,
+    rows: lines.map((unused, index) => ({ l: index + 1, r: index + 1, k: 'ctx' })),
+  };
+}
+
+/**
+ * Open the first changed file and return the rendered panel.
+ * @param t the test context.
+ * @param options the entries and the diff the stub serves.
+ * @returns the panel.
+ */
+async function openDiff(t, options) {
+  const panel = await renderPanel(t, options);
+  await until(() => panel.container.querySelector('.gitp-filerow') !== null, 'the file appears');
+  panel.container.querySelector('.gitp-filerow').click();
+  await until(() => panel.container.querySelector('.gitp-panes') !== null, 'the split diff renders');
+  return panel;
+}
+
+test('AC-116: a supported diff renders tokens and keeps every row text exact', async (t) => {
+  const panel = await openDiff(t, { entries: [statusEntry('total.ts')], diff: codeDiff });
+  await until(() => panel.container.querySelector('.gitp-hl-keyword') !== null, 'tokens arrive with the chunk');
+
+  const [leftPane] = panel.container.querySelectorAll('.gitp-pane');
+  assert.deepEqual(
+    [...leftPane.querySelectorAll('.gitp-code')].map((row) => row.textContent),
+    ['export function total(value: number): number {', '  return value', '}'],
+    'every row keeps its source text',
+  );
+  assert.equal(panel.container.querySelector('.gitp-hl-keyword').textContent, 'export');
+  assert.equal(panel.container.querySelector('.gitp-hl-type').textContent, 'number');
+});
+
+test('AC-117: a changed middle keeps its tokens inside the word background', async (t) => {
+  const panel = await openDiff(t, { entries: [statusEntry('total.ts')], diff: codeDiff });
+  await until(() => panel.container.querySelector('.gitp-hl-number') !== null, 'tokens arrive');
+
+  const [, rightPane] = panel.container.querySelectorAll('.gitp-pane');
+  const word = rightPane.querySelector('.gitp-line.is-add .gitp-word');
+  assert.notEqual(word, null, 'the changed middle is marked');
+  assert.equal(word.textContent, ' + 1');
+  assert.equal(word.querySelector('.gitp-hl-number').textContent, '1', 'the number keeps its token color');
+});
+
+test('AC-118: the unified diff highlights through the same tokens', async (t) => {
+  const panel = await openDiff(t, { entries: [statusEntry('total.ts')], diff: codeDiff });
+  panel.container.querySelector('[aria-label="diff.unified"]').click();
+  await until(() => panel.container.querySelector('.gitp-unified') !== null, 'the unified diff renders');
+  await until(
+    () => panel.container.querySelector('.gitp-ucontent .gitp-hl-keyword') !== null,
+    'tokens render in the unified diff',
+  );
+  assert.equal(panel.container.querySelector('.gitp-ucontent .gitp-hl-keyword').textContent, 'export');
+});
+
+test('AC-119: an unknown suffix renders plain text', async (t) => {
+  const panel = await openDiff(t, { entries: [statusEntry('notes.unknown')], diff: codeDiff });
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(panel.container.querySelector('[class*="gitp-hl-"]'), null, 'no token spans');
+  assert.equal(
+    panel.container.querySelector('.gitp-code').textContent,
+    'export function total(value: number): number {',
+    'the row still reads as the source line',
+  );
+});
+
+test('AC-121: the commit message request carries the Session id', async (t) => {
+  const panel = await renderPanel(t, {
+    entries: [statusEntry('a.txt', { staged: true, unstaged: false, index: 'M', worktree: ' ' })],
+  });
+  panel.container.querySelector('.gitp-ai-wrap button').click();
+  await until(
+    () => panel.container.querySelectorAll('.gitp-popover-row').length > 0,
+    'the AI menu opened',
+  );
+  const row = [...panel.container.querySelectorAll('.gitp-popover-row')].find(
+    (item) => item.textContent === 'ai.write',
+  );
+  assert.notEqual(row, undefined, 'the write row is in the menu');
+  row.click();
+  await until(
+    () => panel.calls.some((entry) => entry.endpoint === 'aiMessage'),
+    'the panel asks for a commit message',
+  );
+  const send = panel.calls.find((entry) => entry.endpoint === 'aiMessage');
+  assert.equal(send.payload.sessionId, 'session-1');
+});
+
+test('AC-120: a side over the size cap renders plain text', async (t) => {
+  const panel = await openDiff(t, { entries: [statusEntry('large.ts')], diff: longDiff });
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(panel.container.querySelector('[class*="gitp-hl-"]'), null, 'no token spans');
+  assert.equal(panel.container.querySelectorAll('.gitp-pane')[0].querySelectorAll('.gitp-code').length, 240);
+  assert.equal(panel.container.querySelector('.gitp-code').textContent, LONG_LINE);
 });
