@@ -288,7 +288,9 @@ const EN = {
   'stash.title': 'Stash changes',
   'stash.message': 'Stash message',
   'stash.select': 'Files to stash',
-  'stash.selectHint': 'Only the selected files are stashed. Untracked files are included.',
+  'stash.selectHint': 'Only selected files are stashed. All staged and unstaged changes in each selected file are included.',
+  'stash.busy': 'Wait for the current operation to finish.',
+  'stash.renameHint': 'Renamed files and their old paths cannot be stashed. Deselect them or commit or unstage the rename first.',
   'stash.default': 'WIP',
   'stash.nothing': 'No files to stash.',
   'stash.created': 'Stashed {count} files',
@@ -549,7 +551,9 @@ const ZH = {
   'stash.title': '贮藏更改',
   'stash.message': '贮藏信息',
   'stash.select': '要贮藏的文件',
-  'stash.selectHint': '只贮藏选中的文件。未跟踪文件也会包含。',
+  'stash.selectHint': '只贮藏选中的文件，每个文件中已暂存和未暂存的更改都会包含。',
+  'stash.busy': '请等待当前操作完成。',
+  'stash.renameHint': '无法贮藏重命名的文件或其旧路径。请取消选择，或先提交或取消暂存重命名。',
   'stash.default': 'WIP',
   'stash.nothing': '没有可贮藏的文件。',
   'stash.created': '已贮藏 {count} 个文件',
@@ -1759,8 +1763,9 @@ function StashDialog({ t, files, busy, error, onCreate, onClose }: StashDialogPr
   };
   return h(
     Modal,
-    { title: t('stash.title'), onClose, closeLabel: t('action.close') },
+    { title: t('stash.title'), onClose: () => { if (!busy) onClose(); }, closeLabel: t('action.close') },
     h('div', { className: 'gitp-modal-sub' }, t('stash.selectHint')),
+    h('div', { className: 'gitp-modal-sub' }, t('stash.renameHint')),
     files.length > 1
       ? h(
           'div',
@@ -1808,7 +1813,7 @@ function StashDialog({ t, files, busy, error, onCreate, onClose }: StashDialogPr
         placeholder: t('stash.default'),
       }),
     ),
-    error ? h('div', { className: 'gitp-modal-error' }, error) : null,
+    error ? h('div', { className: 'gitp-modal-error', role: 'alert' }, error) : null,
     h(
       'div',
       { className: 'gitp-modal-actions' },
@@ -1924,6 +1929,7 @@ interface ChangesViewProps {
   onBatchStage: (entries: StatusEntry[]) => Promise<boolean>;
   onBatchUnstage: (entries: StatusEntry[]) => Promise<boolean>;
   onBatchDiscard: (entries: StatusEntry[]) => void;
+  onStash: (value: { paths: string[]; message: string }) => Promise<void>;
   diff: DiffPayload | null;
   diffLoading: boolean;
   layout: string;
@@ -1970,6 +1976,7 @@ function ChangesView({
   onBatchStage,
   onBatchUnstage,
   onBatchDiscard,
+  onStash,
   diff,
   diffLoading,
   layout,
@@ -2011,6 +2018,14 @@ function ChangesView({
     return new Set([keyOf(selection.side, selection.path)]);
   });
   const [batchMode, setBatchMode] = useState(false);
+  const [stashFiles, setStashFiles] = useState<StatusEntry[] | null>(null);
+  const [stashError, setStashError] = useState<string | null>(null);
+  const focusAfterStash = useRef(false);
+  useEffect(() => {
+    if (stashFiles !== null || !focusAfterStash.current) return;
+    focusAfterStash.current = false;
+    (changesListRef.current?.querySelector<HTMLElement>('.gitp-filerow') ?? changesListRef.current?.querySelector<HTMLElement>('.gitp-filter-box input'))?.focus();
+  }, [stashFiles, snapshot]);
   const pickedAnchor = useRef<FileSelection | null>(null);
   const [collapsed, setCollapsed] = useState({ conflicts: false, staged: false, unstaged: false });
   const toggleSection = (key: 'conflicts' | 'staged' | 'unstaged'): void =>
@@ -2175,6 +2190,25 @@ function ChangesView({
       : ((selection.side === 'staged' ? staged : unstaged).find((entry) => entry.path === selection.path) ??
         null);
 
+  function openStash(entries: StatusEntry[]): void {
+    const unique = [...new Map(entries.map((entry) => [entry.path, entry])).values()];
+    if (unique.length === 0) return;
+    setStashError(null);
+    setStashFiles(unique);
+  }
+
+  async function createStash(value: { paths: string[]; message: string }): Promise<void> {
+    setStashError(null);
+    try {
+      await onStash(value);
+      focusAfterStash.current = true;
+      setStashFiles(null);
+      clearPicked();
+    } catch (event) {
+      setStashError(errorMessage(event));
+    }
+  }
+
   const stagedStats = useMemo(() => {
     let add = 0;
     let del = 0;
@@ -2257,6 +2291,18 @@ function ChangesView({
                 onClick: () => runBatch('unstage'),
               },
               h(Icon, { path: paths.minus, size: 14 }),
+            ),
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'gitp-batch-btn',
+                'aria-label': t('action.stash'),
+                title: t('action.stash'),
+                disabled: fileBusy,
+                onClick: () => openStash(pickedEntries.map((item) => item.entry)),
+              },
+              h(Icon, { path: paths.stash, size: 14 }),
             ),
             h(
               'button',
@@ -2612,6 +2658,7 @@ function ChangesView({
             onBack,
             onOpen,
             onDiscard: discardEntry === null ? undefined : () => onDiscard(discardEntry),
+            onStash: discardEntry === null || picked.size > 1 ? undefined : () => openStash([discardEntry]),
           })
         : h(Empty, {
             icon: h(Icon, { path: paths.file, size: 28 }),
@@ -2620,6 +2667,14 @@ function ChangesView({
           }),
     )
       : null,
+    stashFiles === null ? null : h(StashDialog, {
+      t,
+      files: stashFiles,
+      busy: fileBusy,
+      error: stashError,
+      onCreate: createStash,
+      onClose: () => setStashFiles(null),
+    }),
   );
 }
 
@@ -2638,6 +2693,7 @@ interface DiffViewProps {
   onBack?: () => void;
   onOpen?: (diff: DiffPayload) => void;
   onDiscard?: () => void;
+  onStash?: () => void;
 }
 
 function DiffView({
@@ -2655,6 +2711,7 @@ function DiffView({
   onBack,
   onOpen,
   onDiscard,
+  onStash,
 }: DiffViewProps) {
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const [changeNav, setChangeNav] = useState({ index: -1, canPrev: false, canNext: false });
@@ -2878,6 +2935,14 @@ function DiffView({
                 h(Icon, { path: paths.unified, size: 13 }),
               ),
             ),
+        onStash !== undefined
+          ? h(IconButton, {
+              label: t('action.stash'),
+              icon: paths.stash,
+              onClick: onStash,
+              disabled: busy,
+            })
+          : null,
         onDiscard !== undefined
           ? h(IconButton, {
               label: t('action.discard'),
@@ -4541,7 +4606,7 @@ function StashView({ call, workspaceId, repo, t, snapshot, onStatus, refreshToke
     return () => clearTimeout(id);
   }, [toast]);
 
-  const files = (snapshot?.entries ?? []).filter((entry) => entry.unstaged && !entry.conflicted);
+  const files = (snapshot?.entries ?? []).filter((entry) => (entry.staged || entry.unstaged) && !entry.conflicted);
 
   async function create({ paths, message }: { paths: string[]; message: string }): Promise<void> {
     setBusy('create');
@@ -5172,6 +5237,21 @@ function GitPanel({ call, t, useWorkspaces, useSessions, sessionId, useTabInfo, 
     }
   }
 
+  async function stashSelected(value: { paths: string[]; message: string }): Promise<void> {
+    if (busy !== null) throw new Error(t('stash.busy'));
+    setBusy('stash');
+    try {
+      const result = await call('stashPush', { workspaceId, repo: repoRoot, paths: value.paths, message: value.message });
+      applyStatus(result.status);
+      setSelection(null);
+      setDiff(null);
+      setToast(t('stash.created', { count: value.paths.length }));
+      setRefreshToken((current) => current + 1);
+    } finally {
+      setBusy(null);
+    }
+  }
+
   function askDiscardMany(entries: StatusEntry[]): void {
     if (busy !== null) return;
     const paths = [...new Set(entries.map((entry) => entry.path))];
@@ -5716,6 +5796,7 @@ function GitPanel({ call, t, useWorkspaces, useSessions, sessionId, useTabInfo, 
                     onBatchStage: (entries) => batchToggle(entries, 'unstaged'),
                     onBatchUnstage: (entries) => batchToggle(entries, 'staged'),
                     onBatchDiscard: askDiscardMany,
+                    onStash: stashSelected,
                     diff,
                     diffLoading,
                     layout: effectiveLayout,

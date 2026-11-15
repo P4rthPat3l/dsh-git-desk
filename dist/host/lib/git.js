@@ -1597,15 +1597,35 @@ export async function stashList(runtime, root) {
  */
 export async function stashPush(runtime, root, options) {
     const message = typeof options.message === 'string' && options.message.trim() !== '' ? options.message.trim() : 'WIP';
-    const paths = Array.isArray(options.paths) ? options.paths.map((value) => repoPath(root, value).path) : [];
+    if (!Array.isArray(options.paths) || options.paths.length === 0) {
+        throw new GitError('git/invalid-path', 'Select at least one file to stash.');
+    }
+    const paths = [...new Set(options.paths.map((value) => repoPath(root, value).path))];
+    const snapshot = await readStatus(runtime, root);
+    if (snapshot.merging || snapshot.rebasing || snapshot.reverting || snapshot.cherryPicking) {
+        throw new GitError('git/operation', 'Finish the current operation before stashing changes.');
+    }
+    const entries = paths.map((path) => snapshot.entries.find((entry) => entry.path === path));
+    if (entries.some((entry) => entry === undefined)) {
+        throw new GitError('git/stale', 'A selected file changed after the list was read. Refresh and try again.');
+    }
+    if (entries.some((entry) => entry?.conflicted)) {
+        throw new GitError('git/conflict', 'Resolve conflicts before stashing changes.');
+    }
+    if (entries.some((entry) => entry?.kind === 'renamed') ||
+        snapshot.entries.some((entry) => entry.kind === 'renamed' && entry.from != null && paths.includes(entry.from))) {
+        throw new GitError('git/unsupported', 'Stashing renamed files or their old paths is not supported. Commit or unstage the rename first.');
+    }
     const args = ['stash', 'push', '-m', message];
-    if (options.includeUntracked === true)
+    if (entries.some((entry) => entry?.untracked))
         args.push('-u');
-    if (paths.length > 0)
-        args.push('--', ...paths);
+    args.push('--', ...paths.map((value) => `:(literal)${value}`));
     const result = await runtime.run(root, args);
     if (result.code !== 0)
         throw failure(result, 'Git could not stash the selected files.');
+    if (result.stdout.includes('No local changes to save')) {
+        throw new GitError('git/stale', 'The selected files no longer have changes. Refresh and try again.');
+    }
     return {
         output: `${result.stdout}${result.stderr}`.trim(),
         status: await readStatus(runtime, root),

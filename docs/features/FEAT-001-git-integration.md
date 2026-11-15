@@ -6,7 +6,7 @@ implementation_status: shipped_unverified
 version: 0.23.0
 owners: [Parth Patel]
 created: 2026-11-09
-last_updated: 2026-11-12
+last_updated: 2026-11-15
 last_verified_commit: none
 ---
 
@@ -525,6 +525,33 @@ The two snapshot fields are optional because only a `status` response knows them
 - A status refresh can remove a selected path. The client drops only the keys the snapshot no longer holds and keeps the rest of the batch.
 - In the compact layout the diff is not previewed while a batch is active. A plain click on a row returns to the diff.
 
+### Selected-file stash
+
+**Status: Implemented, unverified in the running page.** The client and host were reviewed in the working tree; the document as a whole has no verified commit.
+
+The diff header stashes a single selected file. The batch bar stashes the unique selected files. The Stashes tab offers staged, unstaged, and untracked files. The shared dialog lists the selected paths, lets the user adjust them and enter a message, and warns that each selected path includes all staged and unstaged changes. Cancel does not send a request. A successful request refreshes status and clears the selection; a failed request remains in the dialog.
+
+The client sends selected paths to the Git host. The host checks fresh status, refuses empty, stale, conflicted, renamed, and rename-old-path selections and active merge, rebase, revert, or cherry-pick operations. It passes literal pathspecs to Git and includes untracked files when selected. The Git stash contains both the index and working-tree versions. Apply and Pop use the existing Git commands without the reinstate-index option, so restored changes are not automatically re-staged.
+
+**Implementation map.** [Client](../../src/client/main.ts), [Git host](../../src/host/lib/git.ts), [RPC](../../src/host/lib/rpc.ts), [client tests](../../tests/client.test.mjs), [host tests](../../tests/stash.test.mjs), and [README](../../README.md). Generated outputs are [client bundle](../../client.js) and [compiled host](../../dist/host/lib/git.js).
+
+**Acceptance criteria and tests.**
+
+| ID | Criterion | Verification |
+| --- | --- | --- |
+| AC-090 | A selected staged-only file opens the stash dialog from Changes. | Client test. |
+| AC-091 | A mixed multi-selection lists each selected path once. | Client test. |
+| AC-092 | Selected staged, unstaged, mixed, and untracked files go into one stash; unselected changes remain, and the message is recorded. | Host and client tests. |
+| AC-093 | The dialog warns that both sides of each selected file are included; Cancel sends no request. | Client test. |
+| AC-094 | Wildcard paths cannot select another file; empty and stale selections are refused. | Host test. |
+| AC-095 | Renames and their old paths are refused without changing the files. | Host tests. |
+| AC-096 | Active merges and Git errors do not report success; errors preserve the selection. | Host and client tests. |
+| AC-097 | The Stashes dialog offers staged-only files. Apply, Pop, and Drop remain unchanged. | Client test for selection; existing behavior inspected, restore not separately retested. |
+
+**Validation.** A temporary Git repository probe saved both the staged and unstaged versions of one selected file, reset that file to its base, and left another modified file untouched. The command used Git stash push with a literal pathspec. The project checks are npm run typecheck, npm run build, and npm test. The live authenticated page has not been checked.
+
+**Risks.** Git status can change after validation and before Git runs. Renames are refused as the safe fallback. A failed Git stash operation may require inspecting Git's error and the stash list. The feature document predates this change and contains older unverified claims outside this section.
+
 ## 20. Rollout
 
 Install as a bundle and enable it in Plugins. Open the right sidebar, then the **Git changes** card in the Start guide. No migration and no stored data beyond the two layout preferences.
@@ -553,6 +580,8 @@ These were open during design and are decided for 0.6.0.
 | Start-guide card | A `guide` entry on the `ctx.sidebarRightTabs` type, with the Git mark. |
 
 ## 23. Changelog
+
+- 2026-11-15: added selected-file Git stash actions in Changes and staged-only selection in Stashes. The host validates exact paths, includes both staged and unstaged changes, and refuses renames and active Git operations.
 
 - 2026-11-12: 0.23.0. The Changes list selects several files. Cmd-click or Ctrl-click toggles a file, Shift-click selects the range in one section, and a batch bar appears at two or more selected files with Stage, Unstage, Discard, and Clear. Each action sends one request with the selected paths, using the existing endpoints, then clears the batch and closes the diff. Ctrl/Cmd+Space and Shift+Space mirror the modifiers from the keyboard, a filter change clears the batch, a conflict click keeps the picks, and the compact pane keeps the list and bar on screen while a batch is active. Stash and stash restore are unchanged.
 - 2026-11-12: 0.22.0. Fixed four worktree defects found in review before the release. A worktree that sits in a plain folder was listed twice and its family's main checkout was listed as a worktree of it, because the folder scan and the worktree list both found it; checkouts are now grouped by common Git directory. A prunable worktree no longer offers a branch that Git refuses to check out. A locked worktree whose folder is gone is no longer listed. A cd inside the checkout the panel is already on no longer discards a manual repository pick. The picker also offers Initialize at the workspace root when only a worktree has an outside path.

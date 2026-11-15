@@ -337,6 +337,13 @@ async function renderPanel(t, options = {}) {
       );
       return snapshot(payload);
     }
+    if (endpoint === 'stashList') return { stashes: [] };
+    if (endpoint === 'stashPush') {
+      if (options.stashError) throw new Error('stash failed');
+      const paths = new Set(payload.paths);
+      state.entries = state.entries.filter((entry) => !paths.has(entry.path));
+      return { status: snapshot(payload), stashes: [] };
+    }
     if (endpoint === 'discard') {
       const paths = new Set(payload.paths);
       state.entries = state.entries.filter((entry) => !paths.has(entry.path));
@@ -678,7 +685,7 @@ test('AC-087: the bar hides below two picks and each control names itself', asyn
   assert.equal(panel.container.querySelector('[aria-label="selection.stage"]').disabled, true);
   assert.equal(panel.container.querySelector('[aria-label="selection.unstage"]').disabled, false);
   const buttons = [...panel.container.querySelectorAll('.gitp-batch-btn')];
-  assert.equal(buttons.length, 4, 'the bar has four controls');
+  assert.equal(buttons.length, 5, 'the bar has five controls, including Stash');
   for (const button of buttons) {
     assert.equal(button.title, button.getAttribute('aria-label'));
     assert.notEqual(button.getAttribute('aria-label'), null);
@@ -730,4 +737,63 @@ test('AC-089: Ctrl+Space toggles rows from the keyboard', async (t) => {
   );
   await until(() => panel.container.querySelector('.gitp-batchbar') !== null, 'the bar appears from the keyboard');
   assert.equal(panel.container.querySelectorAll('.gitp-filerow.is-selected').length, 2);
+});
+
+
+test('AC-090 and AC-093: single staged file opens stash and cancel preserves it', async (t) => {
+  const panel = await renderPanel(t, { entries: [statusEntry('staged.txt', { staged: true, unstaged: false })] });
+  await until(() => panel.container.querySelector('.gitp-filerow'), 'file appears');
+  panel.container.querySelector('.gitp-filerow').click();
+  await until(() => panel.container.querySelector('.gitp-diff-head [aria-label="action.stash"]'), 'stash control appears');
+  panel.container.querySelector('.gitp-diff-head [aria-label="action.stash"]').click();
+  await until(() => panel.container.querySelector('.gitp-filechecks'), 'stash dialog opens');
+  assert.match(panel.container.querySelector('.gitp-filechecks').textContent, /staged.txt/);
+  assert.match(panel.container.textContent, /stash.selectHint/);
+  [...panel.container.querySelectorAll('.gitp-modal-actions button')].find((button) => button.textContent === 'action.cancel').click();
+  assert.equal(panel.calls.some((call) => call.endpoint === 'stashPush'), false);
+  assert.equal(panel.state.entries.length, 1);
+});
+
+test('AC-091 and AC-092: batch stash deduplicates selected paths and clears the selection', async (t) => {
+  const panel = await renderPanel(t, { entries: [statusEntry('both.txt', { staged: true, unstaged: true, both: true }), statusEntry('other.txt')] });
+  await until(() => panel.container.querySelectorAll('.gitp-filerow').length === 3, 'rows appear');
+  const rows = [...panel.container.querySelectorAll('.gitp-filerow')];
+  rows[0].click();
+  await until(() => panel.container.querySelectorAll('.gitp-filerow.is-selected').length === 1, 'one selected');
+  rows[1].dispatchEvent(new panel.dom.window.MouseEvent('click', { bubbles: true, ctrlKey: true }));
+  await until(() => panel.container.querySelector('.gitp-batchbar'), 'batch bar appears');
+  panel.container.querySelector('.gitp-batchbar [aria-label="action.stash"]').click();
+  await until(() => panel.container.querySelector('.gitp-filechecks'), 'dialog opens');
+  assert.equal(panel.container.querySelectorAll('.gitp-filechecks input').length, 1);
+  [...panel.container.querySelectorAll('.gitp-modal-actions button')].find((button) => button.textContent === 'action.stash').click();
+  await until(() => panel.calls.some((call) => call.endpoint === 'stashPush'), 'stash call sent');
+  assert.deepEqual(panel.calls.find((call) => call.endpoint === 'stashPush').payload.paths, ['both.txt']);
+  await until(() => panel.container.querySelector('.gitp-filechecks') === null, 'dialog closed');
+  assert.deepEqual(panel.state.entries.map((entry) => entry.path), ['other.txt']);
+});
+
+test('AC-096: stash failure leaves the dialog and selection intact', async (t) => {
+  const panel = await renderPanel(t, { entries: [statusEntry('a.txt')], stashError: true });
+  await until(() => panel.container.querySelector('.gitp-filerow'), 'file appears');
+  panel.container.querySelector('.gitp-filerow').click();
+  await until(() => panel.container.querySelector('.gitp-diff-head [aria-label="action.stash"]'), 'stash control appears');
+  panel.container.querySelector('.gitp-diff-head [aria-label="action.stash"]').click();
+  await until(() => panel.container.querySelector('.gitp-filechecks'), 'dialog opens');
+  [...panel.container.querySelectorAll('.gitp-modal-actions button')].find((button) => button.textContent === 'action.stash').click();
+  await until(() => panel.container.querySelector('.gitp-modal-error'), 'failure appears');
+  assert.match(panel.container.querySelector('.gitp-modal-error').textContent, /stash failed/);
+  assert.equal(panel.state.entries.length, 1);
+  assert.notEqual(panel.container.querySelector('.gitp-filerow.is-selected'), null);
+});
+
+test('AC-097: Stashes offers staged-only files', async (t) => {
+  const panel = await renderPanel(t, { entries: [statusEntry('staged.txt', { staged: true, unstaged: false })] });
+  await until(() => panel.container.querySelector('[aria-label="mode.stash"]'), 'mode selector appears');
+  panel.container.querySelector('[aria-label="mode.stash"]').click();
+  await until(() => panel.container.querySelector('.gitp-stash-head button'), 'stash view appears');
+  const button = panel.container.querySelector('.gitp-stash-head button');
+  assert.equal(button.disabled, false);
+  button.click();
+  await until(() => panel.container.querySelector('.gitp-filechecks'), 'stash dialog appears');
+  assert.match(panel.container.querySelector('.gitp-filechecks').textContent, /staged.txt/);
 });
