@@ -429,7 +429,7 @@ Syntax colors arrive in a lazy chunk. `client.js` gained the loader, the extensi
 - Commit hooks: a failing pre-commit hook blocks a normal commit, Skip hooks commits through it, and branch and commit passes the flag through.
 - Conflicts: a prepared merge conflict, resolve each side, commit.
 - UI: one integration test per acceptance criterion that renders the panel against a stubbed Remote.
-- Highlighting: the client bundle test loads `client.highlight.js` through a stubbed `require.async`, so the token path, the word-diff range, the unified view, the plain fallback, and the size cap run against the real grammars.
+- Highlighting: the client bundle test loads `client.highlight.js` through a stubbed `require.async`, so the token path, the word-diff range, the unified view, the plain fallback, the size cap, the conflict and binary views, and the variable-based palette run against the real grammars.
 - Visual: the mockup screenshots and the plugin screenshots in `docs/screenshots/`, dark and light.
 
 Exact commands depend on the bundle toolchain and are `Unknown` until the plugin skeleton exists.
@@ -591,7 +591,7 @@ The share is a ratio written to the panes as `flex-grow`, not a pixel width, so 
 | AC-100 | The share is stored in this browser under `dsh-git.diffsplit`, survives a reload, and does not change the list and diff width. | Client test reads the stored value. |
 | AC-101 | The unified, conflict, and binary views show no pane divider. | Client test switches to the unified diff. |
 
-**Validation.** `npm run typecheck`, `npm run build`, and `npm test` pass; the suite reports 58 passing tests, 22 of them client cases. The live authenticated page has not been checked, so the drag, the hover line, and the pane proportions have not been seen rendered.
+**Validation.** `npm run typecheck`, `npm run build`, and `npm test` pass; the suite reports 67 passing tests, 30 of them client cases. The live authenticated page has not been checked, so the drag, the hover line, and the pane proportions have not been seen rendered.
 
 **Risks.**
 

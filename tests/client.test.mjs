@@ -921,7 +921,7 @@ async function openDiff(t, options) {
   const panel = await renderPanel(t, options);
   await until(() => panel.container.querySelector('.gitp-filerow') !== null, 'the file appears');
   panel.container.querySelector('.gitp-filerow').click();
-  await until(() => panel.container.querySelector('.gitp-panes') !== null, 'the split diff renders');
+  await until(() => panel.container.querySelector('.gitp-diff-head') !== null, 'the diff renders');
   return panel;
 }
 
@@ -1000,4 +1000,40 @@ test('AC-120: a side over the size cap renders plain text', async (t) => {
   assert.equal(panel.container.querySelector('[class*="gitp-hl-"]'), null, 'no token spans');
   assert.equal(panel.container.querySelectorAll('.gitp-pane')[0].querySelectorAll('.gitp-code').length, 240);
   assert.equal(panel.container.querySelector('.gitp-code').textContent, LONG_LINE);
+});
+
+test('AC-118: token colors resolve through the host palette, never a literal color', async (t) => {
+  const panel = await openDiff(t, { entries: [statusEntry('total.ts')], diff: codeDiff });
+  await until(() => panel.container.querySelector('.gitp-hl-keyword') !== null, 'tokens arrive');
+
+  const sheet = panel.dom.window.document.querySelector('style[data-plugin-css="dsh-git-desk/styles"]');
+  assert.notEqual(sheet, null, 'the plugin stylesheet installs once at module scope');
+  const rules = sheet.textContent.split('}').filter((rule) => rule.includes('.gitp-hl-'));
+  assert.ok(rules.length >= 10, 'the token rules are in the stylesheet');
+  for (const rule of rules) {
+    assert.doesNotMatch(rule, /#[0-9a-fA-F]{3,8}/, `${rule.trim()} holds no literal color`);
+    if (!rule.includes('color:')) continue;
+    assert.match(rule, /(?:^|[;{])color:var\(--(?:shiki|dsw)-/, `${rule.trim()} reads a theme variable`);
+  }
+});
+
+test('AC-119: the conflict and binary views render no tokens', async (t) => {
+  const conflict = await openDiff(t, {
+    entries: [statusEntry('conflict.txt', { kind: 'unmerged', conflicted: true, index: 'U', worktree: 'U' })],
+    diff: (payload) => ({
+      ...emptyDiff(payload),
+      conflict: true,
+      right: ['<<<<<<< HEAD', 'const value = 1;', '=======', 'const value = 2;', '>>>>>>> other'],
+    }),
+  });
+  await until(() => conflict.container.querySelector('.gitp-urow') !== null, 'the conflict view renders');
+  assert.equal(conflict.container.querySelector('[class*="gitp-hl-"]'), null, 'no tokens in the conflict view');
+  assert.match(conflict.container.querySelector('.gitp-unified').textContent, /const value = 1;/);
+
+  const binary = await openDiff(t, {
+    entries: [statusEntry('logo.png', { binary: true })],
+    diff: (payload) => ({ ...emptyDiff(payload), binary: true, leftSize: 10, rightSize: 12 }),
+  });
+  await until(() => binary.container.querySelector('.gitp-binary') !== null, 'the binary view renders');
+  assert.equal(binary.container.querySelector('[class*="gitp-hl-"]'), null, 'no tokens in the binary view');
 });
