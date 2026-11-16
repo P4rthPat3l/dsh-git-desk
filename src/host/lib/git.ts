@@ -10,6 +10,7 @@ import type {
   DiffPayload,
   DiffSide,
   OperationResult,
+  RebasePreview,
   RepoInfo,
   ResetResult,
   RevertResult,
@@ -441,12 +442,38 @@ async function readStatus(runtime: GitRuntime, root: string): Promise<StatusSnap
     });
   }
 
-  const [mergeHead, rebaseHead, revertHead, cherryHead] = await Promise.all([
+  const [mergeHead, revertHead, cherryHead, rebaseDirs] = await Promise.all([
     runtime.run(root, ['rev-parse', '-q', '--verify', 'MERGE_HEAD']),
-    runtime.run(root, ['rev-parse', '-q', '--verify', 'REBASE_HEAD']),
     runtime.run(root, ['rev-parse', '-q', '--verify', 'REVERT_HEAD']),
     runtime.run(root, ['rev-parse', '-q', '--verify', 'CHERRY_PICK_HEAD']),
+    // Git keeps REBASE_HEAD after a successful rebase, so it cannot tell a
+    // running rebase from a finished one. The state directories can. They live
+    // in the per-worktree Git directory.
+    runtime.run(root, [
+      'rev-parse',
+      '--path-format=absolute',
+      '--git-path',
+      'rebase-merge',
+      '--git-path',
+      'rebase-apply',
+    ]),
   ]);
+  const rebaseDirPaths =
+    rebaseDirs.code === 0
+      ? rebaseDirs.stdout
+          .split('\n')
+          .map((line) => line.trim())
+          .filter((line) => line !== '')
+      : [];
+  const rebaseStats = await Promise.all(rebaseDirPaths.map((target) => runtime.lstatPath(target)));
+  const rebaseStarted = rebaseStats.some((stat) => stat !== null && stat.isDirectory());
+  let operationCommit: string | null = null;
+  if (rebaseStarted) {
+    // REBASE_HEAD survives a finished rebase, so read it only while the state
+    // directories say a rebase is actually running.
+    const stopped = await runtime.run(root, ['rev-parse', '--verify', '--quiet', 'REBASE_HEAD']);
+    if (stopped.code === 0 && stopped.stdout.trim() !== '') operationCommit = stopped.stdout.trim();
+  }
 
   return {
     repo: true,
@@ -454,10 +481,11 @@ async function readStatus(runtime: GitRuntime, root: string): Promise<StatusSnap
     branch: parsed.branch,
     entries,
     merging: mergeHead.code === 0,
-    rebasing: rebaseHead.code === 0,
+    rebasing: rebaseStarted,
     reverting: revertHead.code === 0,
     cherryPicking: cherryHead.code === 0,
     conflicts: entries.filter((entry) => entry.conflicted).map((entry) => entry.path),
+    operationCommit,
   };
 }
 
@@ -1448,6 +1476,264 @@ export async function fetch(runtime: GitRuntime, root: string): Promise<Operatio
     output: `${result.stdout}${result.stderr}`.trim(),
     status: await readStatus(runtime, root),
   };
+}
+
+/** One merge request. */
+interface MergeOptions {
+  branch: string;
+  noFastForward: boolean;
+}
+
+/** One rebase request. */
+interface RebaseOptions {
+  branch: string;
+}
+
+/**
+ * Read a branch argument from a request.
+ * @param value the caller value.
+ * @returns the trimmed name.
+ */
+function branchArgument(value: unknown): string {
+  const name = typeof value === 'string' ? value.trim() : '';
+  if (name === '' || name.startsWith('-') || name.includes('\0') || name.includes('\n')) {
+    throw new GitError('git/branch-invalid', 'Choose a branch.');
+  }
+  return name;
+}
+
+/**
+ * Resolve one branch name to its tip commit.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @param value the caller branch.
+ * @returns the name and hash.
+ */
+async function branchTip(
+  runtime: GitRuntime,
+  root: string,
+  value: unknown,
+): Promise<{ name: string; hash: string }> {
+  const name = branchArgument(value);
+  const resolved = await runtime.run(root, ['rev-parse', '--verify', '--quiet', `${name}^{commit}`]);
+  const hash = resolved.stdout.trim();
+  if (resolved.code !== 0 || hash === '') {
+    throw new GitError('git/branch-invalid', `The branch ${name} no longer exists.`);
+  }
+  return { name, hash };
+}
+
+/**
+ * Name the merge or rebase an operation endpoint can act on.
+ * @param snapshot the current status.
+ * @returns the kind, or null.
+ */
+function mergeOrRebase(snapshot: StatusSnapshot): 'merge' | 'rebase' | null {
+  if (snapshot.merging) return 'merge';
+  if (snapshot.rebasing) return 'rebase';
+  return null;
+}
+
+/**
+ * Build the failure for a merge or rebase that did not stop on a conflict.
+ * @param kind the operation.
+ * @param result the command result.
+ * @returns the error.
+ */
+function operationFailure(kind: 'merge' | 'rebase', result: RunResult): GitError {
+  const message =
+    result.stderr.trim() || result.stdout.trim() || (kind === 'merge' ? 'Merge failed.' : 'Rebase failed.');
+  return new GitError(kind === 'merge' ? 'git/merge-failed' : 'git/rebase-failed', message, {
+    stdout: result.stdout,
+    stderr: result.stderr,
+  });
+}
+
+/**
+ * Merge one branch into the current branch.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @param options the merge request.
+ * @returns the output, fresh status, and conflicted paths.
+ */
+export async function merge(runtime: GitRuntime, root: string, options: MergeOptions): Promise<OperationResult> {
+  const snapshot = await readStatus(runtime, root);
+  refuseOperation(snapshot);
+  if (snapshot.branch.detached || snapshot.branch.name === null) {
+    throw new GitError('git/detached', 'Check out a branch before merging.');
+  }
+  const source = await branchTip(runtime, root, options.branch);
+  if (source.name === snapshot.branch.name) {
+    throw new GitError('git/branch-invalid', 'Choose a branch other than the current one.');
+  }
+  const args = ['merge', '--no-edit', options.noFastForward ? '--no-ff' : '--ff', source.name];
+  const result = await runtime.run(root, args);
+  const status = await readStatus(runtime, root);
+  const output = `${result.stdout}${result.stderr}`.trim();
+  if (result.code !== 0) {
+    if (status.merging) return { output, status, conflicted: status.conflicts };
+    throw operationFailure('merge', result);
+  }
+  return { output, status, ...(status.conflicts.length > 0 ? { conflicted: status.conflicts } : {}) };
+}
+
+/**
+ * Rebase the current branch onto another branch.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @param options the rebase request.
+ * @returns the output, fresh status, and conflicted paths.
+ */
+export async function rebase(runtime: GitRuntime, root: string, options: RebaseOptions): Promise<OperationResult> {
+  const snapshot = await readStatus(runtime, root);
+  refuseOperation(snapshot);
+  if (snapshot.branch.detached || snapshot.branch.name === null) {
+    throw new GitError('git/detached', 'Check out a branch before rebasing.');
+  }
+  const source = await branchTip(runtime, root, options.branch);
+  if (source.name === snapshot.branch.name) {
+    throw new GitError('git/branch-invalid', 'Choose a branch other than the current one.');
+  }
+  if (snapshot.entries.length > 0) {
+    throw new GitError('git/dirty-tree', 'Commit or stash your changes before rebasing.');
+  }
+  const result = await runtime.run(root, ['rebase', source.name], {
+    env: { GIT_EDITOR: 'true', GIT_SEQUENCE_EDITOR: 'true' },
+  });
+  const status = await readStatus(runtime, root);
+  const output = `${result.stdout}${result.stderr}`.trim();
+  if (result.code !== 0) {
+    if (status.rebasing) return { output, status, conflicted: status.conflicts };
+    throw operationFailure('rebase', result);
+  }
+  return { output, status, ...(status.conflicts.length > 0 ? { conflicted: status.conflicts } : {}) };
+}
+
+/**
+ * Continue a stopped merge or rebase.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @returns the output, fresh status, and conflicted paths.
+ */
+export async function operationContinue(runtime: GitRuntime, root: string): Promise<OperationResult> {
+  const snapshot = await readStatus(runtime, root);
+  const kind = mergeOrRebase(snapshot);
+  if (kind === null) {
+    throw new GitError('git/no-operation', 'No merge or rebase is in progress.');
+  }
+  if (snapshot.conflicts.length > 0) {
+    throw new GitError('git/conflict', 'Resolve and stage the conflicts before continuing.');
+  }
+  const args = kind === 'merge' ? ['merge', '--continue'] : ['rebase', '--continue'];
+  const result = await runtime.run(root, args, { env: { GIT_EDITOR: 'true', GIT_SEQUENCE_EDITOR: 'true' } });
+  const status = await readStatus(runtime, root);
+  const output = `${result.stdout}${result.stderr}`.trim();
+  if (result.code !== 0) {
+    if ((status.merging || status.rebasing) && status.conflicts.length > 0) {
+      return { output, status, conflicted: status.conflicts };
+    }
+    throw operationFailure(kind, result);
+  }
+  return { output, status, ...(status.conflicts.length > 0 ? { conflicted: status.conflicts } : {}) };
+}
+
+/**
+ * Abort a stopped merge or rebase.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @returns the output and fresh status.
+ */
+export async function operationAbort(runtime: GitRuntime, root: string): Promise<OperationResult> {
+  const snapshot = await readStatus(runtime, root);
+  const kind = mergeOrRebase(snapshot);
+  if (kind === null) {
+    throw new GitError('git/no-operation', 'No merge or rebase is in progress.');
+  }
+  const result = await runtime.run(root, kind === 'merge' ? ['merge', '--abort'] : ['rebase', '--abort']);
+  if (result.code !== 0) {
+    throw new GitError(
+      kind === 'merge' ? 'git/merge-abort-failed' : 'git/rebase-abort-failed',
+      result.stderr.trim() || result.stdout.trim() || `Git could not abort the ${kind}.`,
+      { stdout: result.stdout, stderr: result.stderr },
+    );
+  }
+  return {
+    output: `${result.stdout}${result.stderr}`.trim(),
+    status: await readStatus(runtime, root),
+  };
+}
+
+/**
+ * Skip the commit a rebase stopped on.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @returns the output, fresh status, the skipped commit, and conflicted paths.
+ */
+export async function rebaseSkip(runtime: GitRuntime, root: string): Promise<OperationResult> {
+  const snapshot = await readStatus(runtime, root);
+  if (!snapshot.rebasing) {
+    throw new GitError('git/no-operation', 'No rebase is in progress.');
+  }
+  const stopped = await runtime.run(root, ['rev-parse', '--verify', '--quiet', 'REBASE_HEAD']);
+  const skipped = stopped.code === 0 ? stopped.stdout.trim() : '';
+  const result = await runtime.run(root, ['rebase', '--skip'], {
+    env: { GIT_EDITOR: 'true', GIT_SEQUENCE_EDITOR: 'true' },
+  });
+  const status = await readStatus(runtime, root);
+  const output = `${result.stdout}${result.stderr}`.trim();
+  const extra = skipped === '' ? {} : { skipped };
+  if (result.code !== 0) {
+    if (status.rebasing && status.conflicts.length > 0) {
+      return { output, status, conflicted: status.conflicts, ...extra };
+    }
+    throw operationFailure('rebase', result);
+  }
+  return { output, status, ...extra };
+}
+
+/**
+ * Read what a rebase dialog needs before it starts.
+ * @param runtime the runtime helpers.
+ * @param root the repository root.
+ * @param options the rebase request.
+ * @returns the replay and pushed commit counts.
+ */
+export async function rebasePreview(
+  runtime: GitRuntime,
+  root: string,
+  options: RebaseOptions,
+): Promise<RebasePreview> {
+  const snapshot = await readStatus(runtime, root);
+  refuseOperation(snapshot);
+  if (snapshot.branch.detached || snapshot.branch.name === null) {
+    throw new GitError('git/detached', 'Check out a branch before rebasing.');
+  }
+  const source = await branchTip(runtime, root, options.branch);
+  if (source.name === snapshot.branch.name) {
+    throw new GitError('git/branch-invalid', 'Choose a branch other than the current one.');
+  }
+  const totalResult = await runtime.run(root, ['rev-list', '--count', `${source.name}..HEAD`]);
+  if (totalResult.code !== 0) {
+    throw failure(totalResult, 'Git could not count the commits to replay.');
+  }
+  const total = Number.parseInt(totalResult.stdout.trim(), 10);
+  const commits = Number.isFinite(total) ? total : 0;
+  const upstream = snapshot.branch.upstream;
+  let pushed = 0;
+  if (upstream !== null && upstream !== '') {
+    const unpushedResult = await runtime.run(root, [
+      'rev-list',
+      '--count',
+      `${source.name}..HEAD`,
+      '--not',
+      upstream,
+    ]);
+    if (unpushedResult.code === 0) {
+      const unpushed = Number.parseInt(unpushedResult.stdout.trim(), 10);
+      if (Number.isFinite(unpushed)) pushed = Math.max(0, commits - unpushed);
+    }
+  }
+  return { commits, pushed, upstream };
 }
 
 /**

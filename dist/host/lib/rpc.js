@@ -1,6 +1,6 @@
 import { preferences, writeCommitMessage } from './ai.js';
 import { GitError } from './exec.js';
-import { applyBlocks, branches, checkout, cherryPickCommit, commit, commitDetail, createBranch, createBranchAndCommit, discardPaths, discoverRepositories, diff, fetch, findRepository, initRepository, log, pull, push, recentSubjects, resetToCommit, resolveConflict, resolveRepository, revertCommit, sessionCheckout, stagePaths, stagedPatch, stashApply, stashDrop, stashList, stashPush, status, undoCommit, unstagePaths, } from './git.js';
+import { applyBlocks, branches, checkout, cherryPickCommit, commit, commitDetail, createBranch, createBranchAndCommit, discardPaths, discoverRepositories, diff, fetch, findRepository, initRepository, log, merge, operationAbort, operationContinue, pull, push, rebase, rebasePreview, rebaseSkip, recentSubjects, resetToCommit, resolveConflict, resolveRepository, revertCommit, sessionCheckout, stagePaths, stagedPatch, stashApply, stashDrop, stashList, stashPush, status, undoCommit, unstagePaths, } from './git.js';
 /**
  * Read one field from a client payload.
  * @param payload the payload.
@@ -251,6 +251,21 @@ async function dispatch(ctx, runtime, endpoint, payload) {
                 branch: stringField(payload, 'branch'),
                 remote: valueOf(payload, 'remote') === true,
             });
+        case 'merge':
+            return merge(runtime, root, {
+                branch: stringField(payload, 'branch'),
+                noFastForward: valueOf(payload, 'noFastForward') === true,
+            });
+        case 'rebase':
+            return rebase(runtime, root, { branch: stringField(payload, 'branch') });
+        case 'rebasePreview':
+            return rebasePreview(runtime, root, { branch: stringField(payload, 'branch') });
+        case 'operationContinue':
+            return operationContinue(runtime, root);
+        case 'operationAbort':
+            return operationAbort(runtime, root);
+        case 'rebaseSkip':
+            return rebaseSkip(runtime, root);
         case 'stashList':
             return stashList(runtime, root);
         case 'stashPush':

@@ -4,6 +4,6 @@
 | --- | --- | --- | --- | --- | --- |
 | FEAT-001 | Git integration | [FEAT-001-git-integration.md](FEAT-001-git-integration.md) | active | shipped_unverified | Parth Patel |
 | FEAT-002 | Panel preferences and key bindings | [FEAT-002-panel-preferences.md](FEAT-002-panel-preferences.md) | implemented | partial | Parth Patel |
-| FEAT-003 | Merge and rebase | [FEAT-003-merge-and-rebase.md](FEAT-003-merge-and-rebase.md) | draft | not_started | Parth Patel |
+| FEAT-003 | Merge and rebase | [FEAT-003-merge-and-rebase.md](FEAT-003-merge-and-rebase.md) | active | implemented | Parth Patel |
 
 New documents take the next unused `FEAT-` number and keep the section numbering of the template.

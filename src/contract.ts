@@ -70,6 +70,8 @@ export interface StatusSnapshot {
   reverting: boolean;
   cherryPicking: boolean;
   conflicts: string[];
+  /** The commit a stopped rebase is paused on, when Git reports one. */
+  operationCommit?: string | null;
   repos?: RepoInfo[];
   selected?: string | null;
   workspace?: WorkspaceInfo;
@@ -184,6 +186,20 @@ export interface OperationResult {
   status: StatusSnapshot;
   /** Set by pull when local changes were stashed; conflict means the stash was kept. */
   autoStash?: 'restored' | 'conflict';
+  /** Paths Git stopped on when a merge or rebase left conflicts behind. */
+  conflicted?: string[];
+  /** The commit a rebase skipped, read before the skip ran. */
+  skipped?: string;
+}
+
+/** What the rebase dialog needs before it can warn about rewritten history. */
+export interface RebasePreview {
+  /** Commits Git will replay on top of the source. */
+  commits: number;
+  /** Commits in that set that are already reachable from the upstream ref. */
+  pushed: number;
+  /** The current branch's upstream, or null when it has none. */
+  upstream: string | null;
 }
 
 /** The result of a commit. */

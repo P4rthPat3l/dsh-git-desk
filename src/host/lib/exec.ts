@@ -32,6 +32,8 @@ export interface RunOptions {
   network?: boolean;
   signal?: AbortSignal;
   input?: string;
+  /** Variables added to, or overriding, the default environment. */
+  env?: Record<string, string | undefined>;
 }
 
 /** One file read as text. */
@@ -106,6 +108,7 @@ export function createRuntime(subprocess: SubprocessService): GitRuntime {
     const signal = options.signal === undefined ? timeout : AbortSignal.any([timeout, options.signal]);
     const env: Record<string, string | undefined> = {
       ...process.env,
+      ...(options.env ?? {}),
       LC_ALL: 'C',
       LANG: 'C',
       GIT_TERMINAL_PROMPT: '0',

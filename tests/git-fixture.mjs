@@ -21,14 +21,16 @@ export const skip = hasGit ? false : 'git is not on PATH';
  * @param {string[]} args the arguments.
  * @param {string} home the empty home directory.
  * @param {string} [input] text for stdin; stdin closes immediately otherwise.
+ * @param {Record<string, string | undefined>} [extraEnv] variables that override the fixture environment.
  * @returns {Promise<{ code: number, stdout: string, stderr: string }>} the outcome.
  */
-export function runGit(cwd, args, home, input) {
+export function runGit(cwd, args, home, input, extraEnv) {
   return new Promise((resolve) => {
     const child = spawn('git', args, {
       cwd,
       env: {
         ...process.env,
+        ...(extraEnv ?? {}),
         HOME: home,
         GIT_CONFIG_NOSYSTEM: '1',
         GIT_TERMINAL_PROMPT: '0',
@@ -80,7 +82,7 @@ export async function gitOk(cwd, args, home) {
  */
 export function runtimeFor(home) {
   return {
-    run: (cwd, args, options) => runGit(cwd, args, home, options?.input),
+    run: (cwd, args, options) => runGit(cwd, args, home, options?.input, options?.env),
     async readText(file) {
       try {
         const bytes = await readFile(file);

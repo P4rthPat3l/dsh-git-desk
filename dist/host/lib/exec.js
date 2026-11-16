@@ -65,6 +65,7 @@ export function createRuntime(subprocess) {
         const signal = options.signal === undefined ? timeout : AbortSignal.any([timeout, options.signal]);
         const env = {
             ...process.env,
+            ...(options.env ?? {}),
             LC_ALL: 'C',
             LANG: 'C',
             GIT_TERMINAL_PROMPT: '0',

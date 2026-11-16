@@ -18,8 +18,14 @@ import {
   findRepository,
   initRepository,
   log,
+  merge,
+  operationAbort,
+  operationContinue,
   pull,
   push,
+  rebase,
+  rebasePreview,
+  rebaseSkip,
   recentSubjects,
   resetToCommit,
   resolveConflict,
@@ -316,6 +322,21 @@ async function dispatch(
         branch: stringField(payload, 'branch'),
         remote: valueOf(payload, 'remote') === true,
       });
+    case 'merge':
+      return merge(runtime, root, {
+        branch: stringField(payload, 'branch'),
+        noFastForward: valueOf(payload, 'noFastForward') === true,
+      });
+    case 'rebase':
+      return rebase(runtime, root, { branch: stringField(payload, 'branch') });
+    case 'rebasePreview':
+      return rebasePreview(runtime, root, { branch: stringField(payload, 'branch') });
+    case 'operationContinue':
+      return operationContinue(runtime, root);
+    case 'operationAbort':
+      return operationAbort(runtime, root);
+    case 'rebaseSkip':
+      return rebaseSkip(runtime, root);
     case 'stashList':
       return stashList(runtime, root);
     case 'stashPush':

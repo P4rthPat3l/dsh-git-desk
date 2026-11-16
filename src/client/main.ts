@@ -11,6 +11,7 @@ import type {
   LogCommit,
   ModelPair,
   OperationResult,
+  RebasePreview,
   RepoInfo,
   ResetResult,
   RevertResult,
@@ -76,6 +77,12 @@ interface GitMethods {
   resetToCommit: ResetResult;
   branches: { branches: BranchInfo[] };
   checkout: OperationResult;
+  merge: OperationResult;
+  rebase: OperationResult;
+  rebasePreview: RebasePreview;
+  operationContinue: OperationResult;
+  operationAbort: OperationResult;
+  rebaseSkip: OperationResult;
   stashList: { stashes: StashEntry[] };
   stashPush: OperationResult & { stashes: StashEntry[] };
   stashApply: OperationResult & { stashes: StashEntry[] };
@@ -97,6 +104,27 @@ interface AppliedResult {
   goToChanges?: boolean;
   toast?: string;
 }
+
+/** One merge or rebase the panel started, so the banner can name its branches. */
+interface ActiveOperation {
+  kind: 'merge' | 'rebase';
+  source: string;
+  current: string;
+  /** The branch tip before the operation, used by the abort dialog. */
+  startOid: string;
+}
+
+/** The two sides of a conflicted file as the resolve control names them. */
+interface OperationSides {
+  kind: 'merge' | 'rebase';
+  ours: string;
+  theirs: string;
+}
+
+/** The branch operation dialog the panel can show. */
+type OperationDialog =
+  | { kind: 'merge'; source: string; remote: boolean; error: string | null }
+  | { kind: 'rebase'; source: string; remote: boolean; preview: RebasePreview; error: string | null };
 
 /**
  * Read the stable code from a failed operation.
@@ -284,9 +312,101 @@ const EN = {
   'branch.newHint': 'Created from the current HEAD and checked out. No commit is made.',
   'branch.search': 'Search branches',
   'branch.remote': 'Remote branches',
-  'branch.inWorktree': 'Checked out in another worktree',
   'branch.createdOnly': 'Created {branch}',
   'branch.noneMatch': 'No branch matches',
+  'branch.menuTitle': 'Branches',
+  'branch.actions': 'Branch actions',
+  'branch.actionsFor': 'Actions for {branch}',
+  'branch.checkout': 'Checkout {branch}',
+  'branch.mergeInto': 'Merge into {branch}',
+  'branch.rebaseOnto': 'Rebase {branch} onto {source}',
+  'branch.mergeIntoCurrent': 'Merge into the current branch',
+  'branch.rebaseCurrent': 'Rebase the current branch onto {source}',
+  'branch.mergeHint': 'Fast-forward when {branch} can move forward.',
+  'branch.rebaseHint': 'Replays your local commits on top of {source}.',
+  'branch.checkoutHint': 'Switch the working tree to this branch.',
+  'branch.checkoutRemoteHint': 'Creates a local tracking branch.',
+  'branch.localKind': 'Local branch',
+  'branch.remoteKind': 'Remote branch',
+  'branch.worktreeKind': 'Checked out in {worktree}',
+  'branch.finishFirst': 'Finish the {operation} first.',
+  'branch.detached': 'Check out a branch first.',
+  'operation.merge': 'merge',
+  'operation.rebase': 'rebase',
+  'operation.revert': 'revert',
+  'operation.cherryPick': 'cherry-pick',
+  'merge.title': 'Merge into {branch}',
+  'merge.body': '{source} is merged into {branch}. Git fast-forwards when it can.',
+  'merge.sourceLabel': 'Source',
+  'merge.targetLabel': 'Target',
+  'merge.resultLabel': 'Result',
+  'merge.resultFF': 'fast-forward when Git can',
+  'merge.resultCommit': 'a merge commit',
+  'merge.noFF': 'Always create a merge commit',
+  'merge.noFFHint': 'Creates a merge commit even when a fast-forward is possible.',
+  'merge.note': 'A conflict stops the merge. Resolve the files in Changes, then continue.',
+  'merge.remoteNote': 'Uses the fetched {source}. Fetch first if the remote branch is stale.',
+  'merge.confirm': 'Merge into {branch}',
+  'merge.busy': 'Merging',
+  'rebase.title': 'Rebase onto {source}',
+  'rebase.body': '{branch} replays its {count} commits on top of {source}. This rewrites the branch history.',
+  'rebase.bodyOne': '{branch} replays its commit on top of {source}. This rewrites the branch history.',
+  'rebase.fact': 'Commits to replay',
+  'rebase.factPushed': 'Already on {upstream}',
+  'rebase.pushedWarn': '{count} of those commits are already on {upstream}. The next push will be rejected until you force push.',
+  'rebase.pushedWarnOne': '1 of those commits is already on {upstream}. The next push will be rejected until you force push.',
+  'rebase.dirtyWarn': '{count} files have uncommitted changes. Rebase needs a clean working tree. Commit or stash them first.',
+  'rebase.dirtyWarnOne': '1 file has uncommitted changes. Rebase needs a clean working tree. Commit or stash it first.',
+  'rebase.note': 'A conflict stops the rebase at each commit. Resolve it, then continue or skip the commit.',
+  'rebase.confirm': 'Rebase onto {source}',
+  'rebase.busy': 'Rebasing',
+  'op.merge': 'Merging {source} into {branch}',
+  'op.rebase': 'Rebasing {branch} onto {source}',
+  'op.mergeGeneric': 'Merge in progress',
+  'op.rebaseGeneric': 'Rebase in progress',
+  'op.unresolvedCountOne': '1 unresolved file.',
+  'op.unresolvedCountMany': '{count} unresolved files.',
+  'op.resolveTail': 'Resolve and stage the files, then continue.',
+  'op.resolveSkipTail': 'Resolve and stage the files, then continue or skip this commit.',
+  'op.allResolved': 'All conflicts resolved.',
+  'op.readyMergeTail': 'Continue creates the merge commit.',
+  'op.readyRebaseTail': 'Continue the rebase.',
+  'op.continue': 'Continue',
+  'op.continueHint': 'Continue the operation',
+  'op.continueBlocked': 'Resolve and stage every conflicted file first.',
+  'op.skip': 'Skip',
+  'op.skipHint': 'Skip the stopped commit',
+  'op.abort': 'Abort',
+  'op.abortHint': 'Abort the {operation} and restore the branch',
+  'abort.mergeTitle': 'Abort the merge?',
+  'abort.mergeBody': 'The merge stops and {branch} returns to {hash}. Every conflict resolution is lost.',
+  'abort.rebaseTitle': 'Abort the rebase?',
+  'abort.rebaseBody': 'The rebase stops and {branch} returns to {hash}. Every replayed commit and conflict resolution is lost.',
+  'abort.genericBody': 'The {operation} stops and the branch returns to its state before the operation. Conflict resolutions are lost.',
+  'abort.merge': 'Abort merge',
+  'abort.rebase': 'Abort rebase',
+  'skip.title': 'Skip this commit?',
+  'skip.body': 'The commit being replayed is dropped, including the conflict resolution. The rebase continues with the next commit.',
+  'skip.confirm': 'Skip commit',
+  'skip.commit': 'Stopped commit',
+  'conflict.message': 'This file has unresolved conflicts. Resolve it, then stage it to continue.',
+  'conflict.take': 'Take {branch}',
+  'conflict.sides': 'ours: {ours} · theirs: {theirs}',
+  'conflict.sidesRebase': 'ours: {ours}, the branch replayed onto · theirs: {theirs}, your commits',
+  'conflict.externalSides': 'The panel did not start this operation, so the branch names are unknown.',
+  'opFoot.merge': 'Merge in progress. Continue from the banner above.',
+  'opFoot.rebase': 'Rebase in progress. Continue or skip from the banner above.',
+  'toast.merged': 'Merged {source} into {branch}',
+  'toast.rebased': 'Rebased {branch} onto {source}',
+  'toast.mergeFinished': 'Merge finished',
+  'toast.rebaseFinished': 'Rebase finished',
+  'toast.mergeAborted': 'Merge aborted',
+  'toast.rebaseAborted': 'Rebase aborted',
+  'toast.skipped': 'Skipped {hash}. Rebase finished.',
+  'toast.skippedCommit': 'Skipped {hash}',
+  'toast.skippedDone': 'Commit skipped. Rebase finished.',
+  'toast.commitSkipped': 'Commit skipped',
+  'toast.stoppedAgain': 'Rebase stopped again at the next commit.',
   'stash.title': 'Stash changes',
   'stash.message': 'Stash message',
   'stash.select': 'Files to stash',
@@ -548,9 +668,101 @@ const ZH = {
   'branch.newHint': '从当前 HEAD 创建并切换，不产生提交。',
   'branch.search': '搜索分支',
   'branch.remote': '远端分支',
-  'branch.inWorktree': '已在其他工作树检出',
   'branch.createdOnly': '已创建 {branch}',
   'branch.noneMatch': '没有匹配的分支',
+  'branch.menuTitle': '分支',
+  'branch.actions': '分支操作',
+  'branch.actionsFor': '{branch} 的操作',
+  'branch.checkout': '切换到 {branch}',
+  'branch.mergeInto': '合并到 {branch}',
+  'branch.rebaseOnto': '将 {branch} 变基到 {source}',
+  'branch.mergeIntoCurrent': '合并到当前分支',
+  'branch.rebaseCurrent': '将当前分支变基到 {source}',
+  'branch.mergeHint': '当 {branch} 可以快进时直接快进。',
+  'branch.rebaseHint': '把本地提交重放到 {source} 之上。',
+  'branch.checkoutHint': '把工作区切换到该分支。',
+  'branch.checkoutRemoteHint': '创建本地跟踪分支。',
+  'branch.localKind': '本地分支',
+  'branch.remoteKind': '远端分支',
+  'branch.worktreeKind': '已在 {worktree} 检出',
+  'branch.finishFirst': '请先完成{operation}。',
+  'branch.detached': '请先切换到一个分支。',
+  'operation.merge': '合并',
+  'operation.rebase': '变基',
+  'operation.revert': '还原',
+  'operation.cherryPick': '拣选',
+  'merge.title': '合并到 {branch}',
+  'merge.body': '把 {source} 合并到 {branch}。Git 能快进时会直接快进。',
+  'merge.sourceLabel': '来源',
+  'merge.targetLabel': '目标',
+  'merge.resultLabel': '结果',
+  'merge.resultFF': 'Git 能快进时直接快进',
+  'merge.resultCommit': '一个合并提交',
+  'merge.noFF': '始终创建合并提交',
+  'merge.noFFHint': '即使可以快进也创建合并提交。',
+  'merge.note': '冲突会中止合并。在“更改”中解决文件后继续。',
+  'merge.remoteNote': '使用已获取的 {source}。如果远端分支不是最新，请先获取。',
+  'merge.confirm': '合并到 {branch}',
+  'merge.busy': '正在合并',
+  'rebase.title': '变基到 {source}',
+  'rebase.body': '{branch} 的 {count} 个提交会在 {source} 之上重放。这会重写分支历史。',
+  'rebase.bodyOne': '{branch} 的提交会在 {source} 之上重放。这会重写分支历史。',
+  'rebase.fact': '要重放的提交',
+  'rebase.factPushed': '已在 {upstream}',
+  'rebase.pushedWarn': '其中 {count} 个提交已在 {upstream}。下次推送会被拒绝，除非强制推送。',
+  'rebase.pushedWarnOne': '其中 1 个提交已在 {upstream}。下次推送会被拒绝，除非强制推送。',
+  'rebase.dirtyWarn': '有 {count} 个文件未提交。变基需要干净的工作区。请先提交或贮藏。',
+  'rebase.dirtyWarnOne': '有 1 个文件未提交。变基需要干净的工作区。请先提交或贮藏。',
+  'rebase.note': '每个提交遇到冲突都会中止变基。解决后可以继续或跳过该提交。',
+  'rebase.confirm': '变基到 {source}',
+  'rebase.busy': '正在变基',
+  'op.merge': '正在把 {source} 合并到 {branch}',
+  'op.rebase': '正在把 {branch} 变基到 {source}',
+  'op.mergeGeneric': '合并进行中',
+  'op.rebaseGeneric': '变基进行中',
+  'op.unresolvedCountOne': '还有 1 个未解决文件。',
+  'op.unresolvedCountMany': '还有 {count} 个未解决文件。',
+  'op.resolveTail': '解决并暂存这些文件后继续。',
+  'op.resolveSkipTail': '解决并暂存这些文件后继续，或跳过此提交。',
+  'op.allResolved': '所有冲突已解决。',
+  'op.readyMergeTail': '继续会创建合并提交。',
+  'op.readyRebaseTail': '继续变基。',
+  'op.continue': '继续',
+  'op.continueHint': '继续当前操作',
+  'op.continueBlocked': '请先解决并暂存所有冲突文件。',
+  'op.skip': '跳过',
+  'op.skipHint': '跳过停下的提交',
+  'op.abort': '中止',
+  'op.abortHint': '中止{operation}并恢复分支',
+  'abort.mergeTitle': '中止合并？',
+  'abort.mergeBody': '合并会停止，{branch} 回到 {hash}。所有冲突解决都会丢失。',
+  'abort.rebaseTitle': '中止变基？',
+  'abort.rebaseBody': '变基会停止，{branch} 回到 {hash}。所有重放的提交和冲突解决都会丢失。',
+  'abort.genericBody': '{operation}会停止，分支回到操作前的状态。冲突解决会丢失。',
+  'abort.merge': '中止合并',
+  'abort.rebase': '中止变基',
+  'skip.title': '跳过此提交？',
+  'skip.body': '正在重放的提交会被丢弃，包括冲突解决。变基会继续下一个提交。',
+  'skip.confirm': '跳过提交',
+  'skip.commit': '停下的提交',
+  'conflict.message': '此文件有未解决的冲突。解决并暂存后继续。',
+  'conflict.take': '采用 {branch}',
+  'conflict.sides': 'ours：{ours} · theirs：{theirs}',
+  'conflict.sidesRebase': 'ours：{ours}，被重放到的分支 · theirs：{theirs}，你的提交',
+  'conflict.externalSides': '此操作不是面板发起的，因此不知道分支名。',
+  'opFoot.merge': '合并进行中。请在上方横幅中继续。',
+  'opFoot.rebase': '变基进行中。请在上方横幅中继续或跳过。',
+  'toast.merged': '已把 {source} 合并到 {branch}',
+  'toast.rebased': '已把 {branch} 变基到 {source}',
+  'toast.mergeFinished': '合并完成',
+  'toast.rebaseFinished': '变基完成',
+  'toast.mergeAborted': '已中止合并',
+  'toast.rebaseAborted': '已中止变基',
+  'toast.skipped': '已跳过 {hash}。变基完成。',
+  'toast.skippedCommit': '已跳过 {hash}',
+  'toast.skippedDone': '已跳过提交。变基完成。',
+  'toast.commitSkipped': '已跳过提交',
+  'toast.stoppedAgain': '变基在下一个提交处再次停下。',
   'stash.title': '贮藏更改',
   'stash.message': '贮藏信息',
   'stash.select': '要贮藏的文件',
@@ -1206,6 +1418,9 @@ function Icon({ path, size = 16, viewBox = '0 0 24 24', className, filled = fals
 const paths = {
   branch:
     'M6 3v12a3 3 0 0 0 3 3h6M6 9h6a3 3 0 0 0 3-3V3M6 3.5a1 1 0 1 0 0-.1M18 3.5a1 1 0 1 0 0-.1M18 21a1 1 0 1 0 0-.1',
+  merge: 'M6 3v12a3 3 0 0 0 3 3h6M6 3.5a1 1 0 1 0 0-.1M18 18.5a1 1 0 1 0 0-.1',
+  rebase:
+    'M6 21V9a3 3 0 0 1 3-3h6M15 3l3 3-3 3M6 21.5a1 1 0 1 0 0-.1M18 6.5a1 1 0 1 0 0-.1',
   changes: 'M4 6h16M4 12h10M4 18h13M18 9l3 3-3 3',
   history: 'M3 12a9 9 0 1 0 3-6.7M3 4v5h5M12 7v5l3 2',
   stash: 'M4 8h16M6 8v11a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V8M9 8V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3M10 12h4',
@@ -1400,7 +1615,7 @@ button[data-forge-header]{display:none}
 .gitp-seg button:hover:not(.is-active){color:var(--dsw-alias-label-primary)}
 .gitp-seg button.is-active{background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);box-shadow:var(--dsw-elevation-soft,0 1px 2px rgba(0,0,0,.12))}
 .gitp-conflict-banner{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 12px;border-bottom:1px solid var(--dsw-alias-border-l1);background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 8%,var(--dsw-alias-bg-base));color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:18px;flex:none}
-.gitp-conflict-banner span{flex:1;min-width:160px}
+.gitp-conflict-banner .gitp-conflict-text{flex:1;min-width:160px}
 .gitp-pane-heads{display:flex;flex:none;height:28px;border-bottom:1px solid var(--dsw-alias-border-l1);font-size:12px;color:var(--dsw-alias-label-tertiary)}
 .gitp-pane-head{display:flex;align-items:center;flex:1;min-width:0;padding:0 12px;font-weight:500}
 .gitp-pane-head-gutter{width:52px;flex:none;border-left:1px solid var(--dsw-alias-border-l1);border-right:1px solid var(--dsw-alias-border-l1)}
@@ -1558,6 +1773,43 @@ button[data-forge-header]{display:none}
 .gitp-popover-hint{flex:none;max-width:140px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .gitp-worktree{flex:none;padding:1px 6px;border-radius:var(--dsw-radius-sm,8px);background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;white-space:nowrap}
 .gitp-popover .gitp-modal-sub{padding:6px 8px;margin:0;color:var(--dsw-alias-label-tertiary)}
+.gitp-branch-row{display:flex;align-items:center;gap:2px;border-radius:var(--dsw-radius-sm,8px)}
+.gitp-branch-row:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.gitp-branch-row .gitp-branch-pick{flex:1;min-width:0;width:auto;border-radius:var(--dsw-radius-sm,8px)}
+.gitp-branch-row .gitp-branch-pick:hover:not(:disabled){background:transparent}
+.gitp-branch-row .gitp-branch-pick[aria-current=true]:disabled{opacity:1;cursor:default}
+.gitp-branch-actions{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer;flex:none;opacity:.7;transition:opacity 100ms ease,background-color 100ms ease,color 100ms ease}
+.gitp-branch-row:hover .gitp-branch-actions,.gitp-branch-actions:focus-visible{opacity:1}
+.gitp-branch-actions:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-accent,var(--dsw-alias-interactive-bg-active));color:var(--dsw-alias-label-primary)}
+.gitp-branch-actions:disabled{opacity:.4;cursor:default}
+.gitp-branch-pane-head{display:flex;align-items:center;gap:6px;padding:2px 4px 6px}
+.gitp-branch-pane-head .gitp-iconbtn{width:26px;height:26px;min-width:26px;border-radius:7px}
+.gitp-branch-pane-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:500}
+.gitp-branch-pane-meta{padding:0 8px 6px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary)}
+.gitp-opbanner{display:flex;flex-wrap:wrap;align-items:flex-start;gap:8px 10px;flex:none;margin:0 12px 8px;padding:8px 8px 8px 12px;border-radius:var(--dsw-radius-sm,8px);background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 9%,var(--dsw-alias-bg-base));box-shadow:inset 2px 0 0 var(--dsw-alias-state-warn-primary)}
+.gitp-opbanner-icon{display:flex;flex:none;color:var(--dsw-alias-state-warn-primary);margin-top:2px}
+.gitp-opbanner-main{display:flex;flex:1;min-width:190px;flex-direction:column;gap:1px}
+.gitp-opbanner-title{font-size:13px;line-height:20px;font-weight:500;color:var(--dsw-alias-label-primary)}
+.gitp-opbanner-meta{font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);text-wrap:pretty}
+.gitp-opbanner-meta .is-bad{color:var(--dsw-alias-state-error-primary);font-weight:500}
+.gitp-opbanner-meta .is-ok{color:var(--dsw-alias-state-success-primary);font-weight:500}
+.gitp-opbanner-actions{display:flex;align-items:center;gap:6px;flex:none;margin-left:auto}
+.gitp-opbanner-actions .gitp-btn{height:28px;padding:0 10px;font-size:12px}
+.gitp-opbanner-actions .is-abort{color:var(--dsw-alias-label-secondary)}
+.gitp-opbanner-actions .is-abort:hover:not(:disabled){background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 12%,transparent);color:var(--dsw-alias-state-error-primary)}
+.gitp-opfoot{display:flex;align-items:flex-start;gap:8px;flex:none;padding:10px 12px;border-top:1px solid var(--dsw-alias-border-l1);font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary)}
+.gitp-opfoot svg{flex:none;margin-top:1px;color:var(--dsw-alias-label-tertiary)}
+.gitp-commitbox.is-hidden{display:none}
+.gitp-modal-facts{display:flex;flex-direction:column;gap:4px;margin:0 0 14px;padding:8px 10px;border-radius:var(--dsw-radius-sm,8px);background:var(--dsw-alias-interactive-bg-hover);font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}
+.gitp-modal-fact{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+.gitp-modal-fact b{min-width:0;overflow-wrap:anywhere;text-align:right;font-weight:500;color:var(--dsw-alias-label-primary)}
+.gitp-modal-hint{margin:6px 0 12px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary);text-wrap:pretty}
+.gitp-modal-warn.is-caution{background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 12%,transparent);color:var(--dsw-alias-state-warn-primary)}
+.gitp-conflict-actions{display:flex;gap:6px;flex:none}
+.gitp-conflict-sides{flex-basis:100%;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary);text-wrap:pretty}
+.gitp-root.is-compact .gitp-opbanner{margin:0 8px 8px;padding:8px 8px 8px 10px}
+.gitp-root.is-compact .gitp-opbanner-actions{width:100%;justify-content:flex-end}
+.gitp-root.is-compact .gitp-branch-row .gitp-branch-pick{padding-left:8px}
 .gitp-center{display:flex;flex:1;flex-direction:column;align-items:center;justify-content:center;gap:4px;padding:32px 24px;text-align:center;color:var(--dsw-alias-label-tertiary)}
 .gitp-center-title{font-size:14px;line-height:22px;font-weight:500;color:var(--dsw-alias-label-primary)}
 .gitp-center-hint{max-width:320px;font-size:13px;line-height:20px;color:var(--dsw-alias-label-tertiary);text-wrap:pretty}
@@ -1981,6 +2233,177 @@ function StashDialog({ t, files, busy, error, onCreate, onClose }: StashDialogPr
   );
 }
 
+/** One fact row in a branch operation dialog. */
+interface FactRowProps {
+  label: string;
+  value: string;
+}
+
+function FactRow({ label, value }: FactRowProps) {
+  return h('div', { className: 'gitp-modal-fact' }, h('span', null, label), h('b', null, value));
+}
+
+interface MergeDialogProps {
+  t: Translator;
+  source: string;
+  current: string;
+  remote: boolean;
+  noFastForward: boolean;
+  busy: boolean;
+  error?: string | null;
+  onNoFastForward: (next: boolean) => void;
+  onConfirm: () => void;
+  onClose: () => void;
+}
+
+function MergeDialog({
+  t,
+  source,
+  current,
+  remote,
+  noFastForward,
+  busy,
+  error,
+  onNoFastForward,
+  onConfirm,
+  onClose,
+}: MergeDialogProps) {
+  return h(
+    Modal,
+    {
+      title: t('merge.title', { branch: current }),
+      onClose: () => {
+        if (!busy) onClose();
+      },
+      closeLabel: t('action.close'),
+    },
+    h('div', { className: 'gitp-modal-sub' }, t('merge.body', { source, branch: current })),
+    h(
+      'div',
+      { className: 'gitp-modal-facts' },
+      h(FactRow, { label: t('merge.sourceLabel'), value: source }),
+      h(FactRow, { label: t('merge.targetLabel'), value: current }),
+      h(FactRow, {
+        label: t('merge.resultLabel'),
+        value: noFastForward ? t('merge.resultCommit') : t('merge.resultFF'),
+      }),
+    ),
+    h(
+      'label',
+      { className: 'gitp-dialog-option' },
+      h('input', {
+        type: 'checkbox',
+        checked: noFastForward,
+        onChange: (event: React.ChangeEvent<HTMLInputElement>) => onNoFastForward(event.target.checked),
+        disabled: busy,
+      }),
+      t('merge.noFF'),
+    ),
+    h('div', { className: 'gitp-modal-hint' }, t('merge.noFFHint')),
+    h('div', { className: 'gitp-modal-hint' }, t('merge.note')),
+    remote ? h('div', { className: 'gitp-modal-hint' }, t('merge.remoteNote', { source })) : null,
+    error ? h('div', { className: 'gitp-modal-error', role: 'alert' }, error) : null,
+    h(
+      'div',
+      { className: 'gitp-modal-actions' },
+      h('button', { type: 'button', className: 'gitp-btn', onClick: onClose, disabled: busy }, t('action.cancel')),
+      h(
+        'button',
+        {
+          type: 'button',
+          className: 'gitp-btn is-primary',
+          onClick: onConfirm,
+          disabled: busy,
+        },
+        busy ? h(Spinner) : null,
+        busy ? t('merge.busy') : t('merge.confirm', { branch: current }),
+      ),
+    ),
+  );
+}
+
+interface RebaseDialogProps {
+  t: Translator;
+  source: string;
+  current: string;
+  commits: number;
+  pushed: number;
+  upstream: string | null;
+  dirtyCount: number;
+  remote: boolean;
+  busy: boolean;
+  error?: string | null;
+  onConfirm: () => void;
+  onClose: () => void;
+}
+
+function RebaseDialog({
+  t,
+  source,
+  current,
+  commits,
+  pushed,
+  upstream,
+  dirtyCount,
+  remote,
+  busy,
+  error,
+  onConfirm,
+  onClose,
+}: RebaseDialogProps) {
+  const body =
+    commits === 1
+      ? t('rebase.bodyOne', { branch: current, source })
+      : t('rebase.body', { branch: current, count: commits, source });
+  const dirtyWarn = dirtyCount === 1 ? t('rebase.dirtyWarnOne') : t('rebase.dirtyWarn', { count: dirtyCount });
+  const pushedWarn =
+    upstream === null
+      ? ''
+      : pushed === 1
+        ? t('rebase.pushedWarnOne', { upstream })
+        : t('rebase.pushedWarn', { count: pushed, upstream });
+  return h(
+    Modal,
+    {
+      title: t('rebase.title', { source }),
+      onClose: () => {
+        if (!busy) onClose();
+      },
+      closeLabel: t('action.close'),
+    },
+    h('div', { className: 'gitp-modal-sub' }, body),
+    h(
+      'div',
+      { className: 'gitp-modal-facts' },
+      h(FactRow, { label: t('rebase.fact'), value: String(commits) }),
+      pushed > 0 && upstream !== null
+        ? h(FactRow, { label: t('rebase.factPushed', { upstream }), value: String(pushed) })
+        : null,
+    ),
+    pushed > 0 ? h('div', { className: 'gitp-modal-warn is-caution', role: 'alert' }, pushedWarn) : null,
+    dirtyCount > 0 ? h('div', { className: 'gitp-modal-warn', role: 'alert' }, dirtyWarn) : null,
+    h('div', { className: 'gitp-modal-hint' }, t('rebase.note')),
+    remote ? h('div', { className: 'gitp-modal-hint' }, t('merge.remoteNote', { source })) : null,
+    error ? h('div', { className: 'gitp-modal-error', role: 'alert' }, error) : null,
+    h(
+      'div',
+      { className: 'gitp-modal-actions' },
+      h('button', { type: 'button', className: 'gitp-btn', onClick: onClose, disabled: busy }, t('action.cancel')),
+      h(
+        'button',
+        {
+          type: 'button',
+          className: 'gitp-btn is-primary',
+          onClick: onConfirm,
+          disabled: busy || dirtyCount > 0,
+        },
+        busy ? h(Spinner) : null,
+        busy ? t('rebase.busy') : t('rebase.confirm', { source }),
+      ),
+    ),
+  );
+}
+
 interface FileRowProps {
   entry: StatusEntry;
   side: 'staged' | 'unstaged' | 'conflict';
@@ -2102,6 +2525,8 @@ interface ChangesViewProps {
   canAmend: boolean;
   compact: boolean;
   onBack: () => void;
+  operation: 'merge' | 'rebase' | null;
+  sides: OperationSides | null;
 }
 
 function ChangesView({
@@ -2149,6 +2574,8 @@ function ChangesView({
   canAmend,
   compact,
   onBack,
+  operation,
+  sides,
 }: ChangesViewProps) {
   const [filter, setFilter] = useState('');
   const [listWidth, setListWidth] = useSplitWidth();
@@ -2658,7 +3085,7 @@ function ChangesView({
       ),
       h(
         'div',
-        { className: 'gitp-commitbox' },
+        { className: cx('gitp-commitbox', operation !== null && 'is-hidden') },
         h('textarea', {
           ref: messageRef,
           value: message,
@@ -2771,6 +3198,14 @@ function ChangesView({
             })
           : null,
       ),
+      operation === null
+        ? null
+        : h(
+            'div',
+            { className: 'gitp-opfoot' },
+            h(Icon, { path: operation === 'merge' ? paths.merge : paths.rebase, size: 13 }),
+            h('span', null, operation === 'merge' ? t('opFoot.merge') : t('opFoot.rebase')),
+          ),
     )
       : null,
     showList && showDiff
@@ -2800,6 +3235,8 @@ function ChangesView({
             renamed: selection.renamed === true,
             compact,
             onBack,
+            operation,
+            sides,
             onOpen,
             onDiscard: discardEntry === null ? undefined : () => onDiscard(discardEntry),
             onStash: discardEntry === null || picked.size > 1 ? undefined : () => openStash([discardEntry]),
@@ -2838,6 +3275,8 @@ interface DiffViewProps {
   onOpen?: (diff: DiffPayload) => void;
   onDiscard?: () => void;
   onStash?: () => void;
+  operation: 'merge' | 'rebase' | null;
+  sides: OperationSides | null;
 }
 
 function DiffView({
@@ -2856,6 +3295,8 @@ function DiffView({
   onOpen,
   onDiscard,
   onStash,
+  operation,
+  sides,
 }: DiffViewProps) {
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const [changeNav, setChangeNav] = useState({ index: -1, canPrev: false, canNext: false });
@@ -3103,27 +3544,46 @@ function DiffView({
           'div',
           { className: 'gitp-conflict-banner' },
           h(Icon, { path: paths.warning, size: 14 }),
-          h('span', null, t('diff.conflictBanner')),
           h(
-            'button',
-            {
-              type: 'button',
-              className: 'gitp-btn is-small',
-              onClick: () => onResolve?.('ours'),
-              disabled: busy,
-            },
-            t('action.acceptOurs'),
+            'span',
+            { className: 'gitp-conflict-text' },
+            operation === null ? t('diff.conflictBanner') : t('conflict.message'),
           ),
           h(
-            'button',
-            {
-              type: 'button',
-              className: 'gitp-btn is-small',
-              onClick: () => onResolve?.('theirs'),
-              disabled: busy,
-            },
-            t('action.acceptTheirs'),
+            'div',
+            { className: 'gitp-conflict-actions' },
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'gitp-btn is-small',
+                onClick: () => onResolve?.('ours'),
+                disabled: busy,
+              },
+              sides === null ? t('action.acceptOurs') : t('conflict.take', { branch: sides.ours }),
+            ),
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'gitp-btn is-small',
+                onClick: () => onResolve?.('theirs'),
+                disabled: busy,
+              },
+              sides === null ? t('action.acceptTheirs') : t('conflict.take', { branch: sides.theirs }),
+            ),
           ),
+          sides === null
+            ? operation === null
+              ? null
+              : h('div', { className: 'gitp-conflict-sides' }, t('conflict.externalSides'))
+            : h(
+                'div',
+                { className: 'gitp-conflict-sides' },
+                sides.kind === 'rebase'
+                  ? t('conflict.sidesRebase', { ours: sides.ours, theirs: sides.theirs })
+                  : t('conflict.sides', { ours: sides.ours, theirs: sides.theirs }),
+              ),
         )
       : null,
     diff.binary
@@ -3715,9 +4175,9 @@ function Header({
           className: 'gitp-branch',
           onClick: onBranchMenu,
           disabled: repo === false,
-          'aria-haspopup': 'listbox',
-          'aria-label': t('branch.title'),
-          title: t('branch.title'),
+          'aria-haspopup': 'dialog',
+          'aria-label': t('branch.menuTitle'),
+          title: t('branch.menuTitle'),
         },
         h(Icon, { path: paths.branch, size: 13 }),
         h('span', { className: 'gitp-branch-name' }, branchName),
@@ -3760,6 +4220,115 @@ function Header({
         onClick: onRefresh,
         disabled: busy,
       }),
+    ),
+  );
+}
+
+interface OperationBannerProps {
+  t: Translator;
+  kind: 'merge' | 'rebase';
+  source: string | null;
+  current: string | null;
+  unresolved: number;
+  busy: boolean;
+  onContinue: () => void;
+  onSkip: () => void;
+  onAbort: () => void;
+}
+
+function OperationBanner({
+  t,
+  kind,
+  source,
+  current,
+  unresolved,
+  busy,
+  onContinue,
+  onSkip,
+  onAbort,
+}: OperationBannerProps) {
+  const title =
+    source !== null && current !== null
+      ? kind === 'merge'
+        ? t('op.merge', { source, branch: current })
+        : t('op.rebase', { branch: current, source })
+      : kind === 'merge'
+        ? t('op.mergeGeneric')
+        : t('op.rebaseGeneric');
+  const meta =
+    unresolved > 0
+      ? h(
+          React.Fragment,
+          null,
+          h(
+            'span',
+            { className: 'is-bad' },
+            unresolved === 1 ? t('op.unresolvedCountOne') : t('op.unresolvedCountMany', { count: unresolved }),
+          ),
+          ' ',
+          kind === 'rebase' ? t('op.resolveSkipTail') : t('op.resolveTail'),
+        )
+      : h(
+          React.Fragment,
+          null,
+          h('span', { className: 'is-ok' }, t('op.allResolved')),
+          ' ',
+          kind === 'merge' ? t('op.readyMergeTail') : t('op.readyRebaseTail'),
+        );
+  return h(
+    'div',
+    { className: 'gitp-opbanner', role: 'region', 'aria-label': title },
+    h('span', { className: 'gitp-opbanner-icon' }, h(Icon, { path: kind === 'merge' ? paths.merge : paths.rebase, size: 15 })),
+    h(
+      'div',
+      { className: 'gitp-opbanner-main' },
+      h('div', { className: 'gitp-opbanner-title' }, title),
+      h('div', { className: 'gitp-opbanner-meta', 'aria-live': 'polite' }, meta),
+    ),
+    h(
+      'div',
+      { className: 'gitp-opbanner-actions' },
+      h(
+        'button',
+        {
+          type: 'button',
+          className: 'gitp-btn is-primary is-small',
+          'aria-label': t('op.continue'),
+          title: unresolved > 0 ? t('op.continueBlocked') : t('op.continueHint'),
+          disabled: busy || unresolved > 0,
+          onClick: onContinue,
+        },
+        busy ? h(Spinner) : null,
+        t('op.continue'),
+      ),
+      kind === 'rebase'
+        ? h(
+            'button',
+            {
+              type: 'button',
+              className: 'gitp-btn is-small',
+              'aria-label': t('op.skip'),
+              title: t('op.skipHint'),
+              disabled: busy,
+              onClick: onSkip,
+            },
+            t('op.skip'),
+          )
+        : null,
+      h(
+        'button',
+        {
+          type: 'button',
+          className: 'gitp-btn is-small is-abort',
+          'aria-label': t('op.abort'),
+          title: t('op.abortHint', {
+            operation: kind === 'merge' ? t('operation.merge') : t('operation.rebase'),
+          }),
+          disabled: busy,
+          onClick: onAbort,
+        },
+        t('op.abort'),
+      ),
     ),
   );
 }
@@ -3886,18 +4455,37 @@ interface BranchMenuProps {
   branches: BranchInfo[];
   loading: boolean;
   busy: boolean;
+  current: string | null;
+  detached: boolean;
+  blocked: string | null;
   onCheckout: (name: string, remote: boolean) => void;
+  onMerge: (name: string, remote: boolean) => void;
+  onRebase: (name: string, remote: boolean) => void;
   onNew: () => void;
   onClose: () => void;
 }
 
-function BranchMenu({ t, branches, loading, busy, onCheckout, onNew, onClose }: BranchMenuProps) {
+function BranchMenu({
+  t,
+  branches,
+  loading,
+  busy,
+  current,
+  detached,
+  blocked,
+  onCheckout,
+  onMerge,
+  onRebase,
+  onNew,
+  onClose,
+}: BranchMenuProps) {
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const backRef = useRef<HTMLButtonElement | null>(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
   const [query, setQuery] = useState('');
+  const [actionsFor, setActionsFor] = useState<string | null>(null);
   useEffect(() => {
-    menuRef.current?.querySelector<HTMLInputElement>('input')?.focus();
     const onKey = (event: KeyboardEvent): void => {
       if (event.key !== 'Escape') return;
       event.preventDefault();
@@ -3907,6 +4495,10 @@ function BranchMenu({ t, branches, loading, busy, onCheckout, onNew, onClose }: 
     document.addEventListener('keydown', onKey, true);
     return () => document.removeEventListener('keydown', onKey, true);
   }, []);
+  useEffect(() => {
+    if (actionsFor === null) menuRef.current?.querySelector<HTMLInputElement>('.gitp-search')?.focus();
+    else backRef.current?.focus();
+  }, [actionsFor]);
   const needle = query.trim().toLowerCase();
   const local = branches.filter((item) => !item.remote);
   const localNames = new Set(local.map((item) => item.name));
@@ -3921,24 +4513,192 @@ function BranchMenu({ t, branches, loading, busy, onCheckout, onNew, onClose }: 
   const rows = (items: BranchInfo[], remote: boolean): React.ReactNode[] =>
     items.map((item) => {
       const elsewhere = item.worktree !== null;
+      const isCurrent = item.current === true;
+      const reason =
+        blocked ??
+        (elsewhere
+          ? t('branch.worktreeKind', { worktree: item.worktree ?? '' })
+          : isCurrent
+            ? t('branch.current')
+            : null);
       return h(
-        'button',
-        {
-          type: 'button',
-          key: `${remote ? 'r' : 'l'}:${item.name}`,
-          className: 'gitp-popover-row',
-          role: 'option',
-          'aria-selected': item.current === true,
-          disabled: busy || item.current === true || elsewhere,
-          title: elsewhere ? `${t('branch.inWorktree')}: ${item.worktree ?? ''}` : undefined,
-          onClick: () => onCheckout(item.name, remote),
-        },
-        h(Icon, { path: paths.branch, size: 13 }),
-        h('span', { className: 'gitp-popover-row-text' }, item.name),
-        elsewhere ? h('span', { className: 'gitp-popover-hint' }, item.worktree ?? '') : null,
-        item.current ? h(Icon, { path: paths.check, size: 13, className: 'gitp-checkmark' }) : null,
+        'div',
+        { className: 'gitp-branch-row', key: `${remote ? 'r' : 'l'}:${item.name}` },
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'gitp-popover-row gitp-branch-pick',
+            'aria-current': isCurrent ? 'true' : undefined,
+            disabled: busy || isCurrent || elsewhere || blocked !== null,
+            title: reason ?? t('branch.checkout', { branch: item.name }),
+            onClick: () => onCheckout(item.name, remote),
+          },
+          h(Icon, { path: paths.branch, size: 13 }),
+          h('span', { className: 'gitp-popover-row-text' }, item.name),
+          blocked !== null && !isCurrent
+            ? h('span', { className: 'gitp-popover-hint' }, blocked)
+            : elsewhere
+              ? h('span', { className: 'gitp-popover-hint' }, item.worktree ?? '')
+              : null,
+          isCurrent ? h(Icon, { path: paths.check, size: 13, className: 'gitp-checkmark' }) : null,
+        ),
+        isCurrent
+          ? null
+          : h(
+              'button',
+              {
+                type: 'button',
+                className: 'gitp-branch-actions',
+                'aria-label': t('branch.actionsFor', { branch: item.name }),
+                title: t('branch.actionsFor', { branch: item.name }),
+                disabled: busy,
+                onClick: () => setActionsFor(item.name),
+              },
+              h(Icon, { path: paths.more, size: 14 }),
+            ),
       );
     });
+  const item = actionsFor === null ? null : (branches.find((branch) => branch.name === actionsFor) ?? null);
+  const actionRow = (
+    action: string,
+    iconPath: string,
+    label: string,
+    hint: string,
+    reason: string | null,
+    onClick: () => void,
+  ): React.ReactNode =>
+    h(
+      'button',
+      {
+        type: 'button',
+        className: 'gitp-action-row',
+        'data-action': action,
+        disabled: reason !== null,
+        title: reason ?? hint,
+        onClick,
+      },
+      h(Icon, { path: iconPath, size: 14 }),
+      h(
+        'div',
+        { className: 'gitp-action-text' },
+        h('span', { className: 'gitp-action-label' }, label),
+        reason !== null || hint !== '' ? h('span', { className: 'gitp-action-reason' }, reason ?? hint) : null,
+      ),
+    );
+  const actionsPane =
+    item === null
+      ? null
+      : (() => {
+          const elsewhere = item.worktree !== null;
+          const isCurrent = item.current === true;
+          const checkoutReason =
+            blocked ??
+            (elsewhere
+              ? t('branch.worktreeKind', { worktree: item.worktree ?? '' })
+              : isCurrent
+                ? t('branch.current')
+                : null);
+          const branchReason = blocked ?? (detached || current === null ? t('branch.detached') : null);
+          const meta = elsewhere
+            ? t('branch.worktreeKind', { worktree: item.worktree ?? '' })
+            : item.remote
+              ? t('branch.remoteKind')
+              : t('branch.localKind');
+          return h(
+            'div',
+            { className: 'gitp-branch-pane' },
+            h(
+              'div',
+              { className: 'gitp-branch-pane-head' },
+              h(
+                'button',
+                {
+                  type: 'button',
+                  ref: backRef,
+                  className: 'gitp-iconbtn',
+                  'aria-label': t('action.back'),
+                  title: t('action.back'),
+                  onClick: () => setActionsFor(null),
+                },
+                h(Icon, { path: paths.left, size: 15 }),
+              ),
+              h('span', { className: 'gitp-branch-pane-name', title: item.name }, item.name),
+            ),
+            h('div', { className: 'gitp-branch-pane-meta' }, meta),
+            h('div', { className: 'gitp-popover-sep' }),
+            actionRow(
+              'checkout',
+              paths.branch,
+              t('branch.checkout', { branch: item.name }),
+              item.remote ? t('branch.checkoutRemoteHint') : t('branch.checkoutHint'),
+              checkoutReason,
+              () => onCheckout(item.name, item.remote),
+            ),
+            actionRow(
+              'merge',
+              paths.merge,
+              current === null ? t('branch.mergeIntoCurrent') : t('branch.mergeInto', { branch: current }),
+              current === null ? '' : t('branch.mergeHint', { branch: current }),
+              branchReason,
+              () => onMerge(item.name, item.remote),
+            ),
+            actionRow(
+              'rebase',
+              paths.rebase,
+              current === null
+                ? t('branch.rebaseCurrent', { source: item.name })
+                : t('branch.rebaseOnto', { branch: current, source: item.name }),
+              t('branch.rebaseHint', { source: item.name }),
+              branchReason,
+              () => onRebase(item.name, item.remote),
+            ),
+          );
+        })();
+  const listPane = h(
+    React.Fragment,
+    null,
+    h('input', {
+      className: 'gitp-search',
+      value: query,
+      placeholder: t('branch.search'),
+      onChange: (event) => setQuery(event.target.value),
+      'aria-label': t('branch.search'),
+    }),
+    h(
+      'button',
+      {
+        type: 'button',
+        className: 'gitp-popover-row',
+        disabled: busy || blocked !== null,
+        title: blocked ?? undefined,
+        onClick: onNew,
+      },
+      h(Icon, { path: paths.plus, size: 13 }),
+      h('span', { className: 'gitp-popover-row-text' }, t('branch.new')),
+    ),
+    h('div', { className: 'gitp-popover-sep' }),
+    loading ? h('div', { className: 'gitp-modal-sub' }, t('branch.loading')) : null,
+    !loading && filteredLocal.length === 0 && filteredRemote.length === 0
+      ? h('div', { className: 'gitp-modal-sub' }, needle === '' ? t('branch.none') : t('branch.noneMatch'))
+      : null,
+    filteredLocal.length > 0
+      ? h(
+          React.Fragment,
+          null,
+          h('div', { className: 'gitp-popover-title' }, t('branch.local')),
+          h('div', { className: 'gitp-popover-list' }, rows(filteredLocal, false)),
+        )
+      : null,
+    filteredRemote.length > 0
+      ? h(
+          React.Fragment,
+          null,
+          h('div', { className: 'gitp-popover-title' }, t('branch.remote')),
+          h('div', { className: 'gitp-popover-list' }, rows(filteredRemote, true)),
+        )
+      : null,
+  );
   return h(
     'div',
     {
@@ -3949,41 +4709,13 @@ function BranchMenu({ t, branches, loading, busy, onCheckout, onNew, onClose }: 
     },
     h(
       'div',
-      { className: 'gitp-popover is-wide', ref: menuRef, role: 'listbox', 'aria-label': t('branch.local') },
-      h('input', {
-        className: 'gitp-search',
-        value: query,
-        placeholder: t('branch.search'),
-        onChange: (event) => setQuery(event.target.value),
-        'aria-label': t('branch.search'),
-      }),
-      h(
-        'button',
-        { type: 'button', className: 'gitp-popover-row', disabled: busy, onClick: onNew },
-        h(Icon, { path: paths.plus, size: 13 }),
-        h('span', { className: 'gitp-popover-row-text' }, t('branch.new')),
-      ),
-      h('div', { className: 'gitp-popover-sep' }),
-      loading ? h('div', { className: 'gitp-modal-sub' }, t('branch.loading')) : null,
-      !loading && filteredLocal.length === 0 && filteredRemote.length === 0
-        ? h('div', { className: 'gitp-modal-sub' }, needle === '' ? t('branch.none') : t('branch.noneMatch'))
-        : null,
-      filteredLocal.length > 0
-        ? h(
-            React.Fragment,
-            null,
-            h('div', { className: 'gitp-popover-title' }, t('branch.local')),
-            h('div', { className: 'gitp-popover-list' }, rows(filteredLocal, false)),
-          )
-        : null,
-      filteredRemote.length > 0
-        ? h(
-            React.Fragment,
-            null,
-            h('div', { className: 'gitp-popover-title' }, t('branch.remote')),
-            h('div', { className: 'gitp-popover-list' }, rows(filteredRemote, true)),
-          )
-        : null,
+      {
+        className: 'gitp-popover is-wide',
+        ref: menuRef,
+        role: 'dialog',
+        'aria-label': actionsPane === null ? t('branch.menuTitle') : t('branch.actions'),
+      },
+      actionsPane === null ? listPane : actionsPane,
     ),
   );
 }
@@ -4765,6 +5497,8 @@ function LogView({
                 selectionKey: `${detail?.hash ?? ''}:${file}`,
                 compact,
                 onBack: compact ? () => setFile(null) : undefined,
+                operation: null,
+                sides: null,
               })
             : h(Empty, {
                 icon: h(Icon, { path: paths.changes, size: 28 }),
@@ -5198,6 +5932,9 @@ function GitPanel({ call, t, useWorkspaces, useSessions, sessionId, useTabInfo, 
   } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [stashNotice, setStashNotice] = useState<string | null>(null);
+  const [operationDialog, setOperationDialog] = useState<OperationDialog | null>(null);
+  const [activeOperation, setActiveOperation] = useState<ActiveOperation | null>(null);
+  const [noFastForward, setNoFastForward] = useState(false);
   const [refreshToken, setRefreshToken] = useState(0);
   const [repos, setRepos] = useState<RepoInfo[]>([]);
   const [repoRoot, setRepoRoot] = useState<string | null>(null);
@@ -5240,6 +5977,9 @@ function GitPanel({ call, t, useWorkspaces, useSessions, sessionId, useTabInfo, 
     if (!next || !Array.isArray(next.entries)) return;
     epoch.current += 1;
     setSnapshot(next);
+    // The banner names the operation only while the client still remembers it.
+    // A reload or a terminal start leaves the banners generic.
+    if (!next.merging && !next.rebasing) setActiveOperation(null);
   }, []);
 
   const loadStatus = useCallback(
@@ -5256,6 +5996,7 @@ function GitPanel({ call, t, useWorkspaces, useSessions, sessionId, useTabInfo, 
         if (current === epoch.current) {
           failedRepo.current = null;
           setSnapshot(next);
+          if (!next.merging && !next.rebasing) setActiveOperation(null);
           if (Array.isArray(next.repos) && next.repos.length > 0) setRepos(next.repos);
           setError(null);
         }
@@ -5316,6 +6057,8 @@ function GitPanel({ call, t, useWorkspaces, useSessions, sessionId, useTabInfo, 
       setRepos([]);
       setRepoRoot(null);
       setSnapshot(null);
+      setActiveOperation(null);
+      setOperationDialog(null);
     }
     const controller = new AbortController();
     (async () => {
@@ -5381,6 +6124,26 @@ function GitPanel({ call, t, useWorkspaces, useSessions, sessionId, useTabInfo, 
   const unstaged = snapshot?.entries?.filter((entry) => entry.unstaged && !entry.conflicted) ?? [];
   const canCommit =
     staged.length > 0 && conflicts.length === 0 && message.trim() !== '' && snapshot?.repo !== false;
+  const activeKind: 'merge' | 'rebase' | null =
+    snapshot?.merging === true ? 'merge' : snapshot?.rebasing === true ? 'rebase' : null;
+  const operationInfo =
+    activeOperation !== null && activeOperation.kind === activeKind ? activeOperation : null;
+  const operationSides: OperationSides | null =
+    operationInfo === null || activeKind === null
+      ? null
+      : activeKind === 'merge'
+        ? { kind: 'merge', ours: operationInfo.current, theirs: operationInfo.source }
+        : { kind: 'rebase', ours: operationInfo.source, theirs: operationInfo.current };
+  const blockedReason =
+    snapshot?.merging === true
+      ? t('branch.finishFirst', { operation: t('operation.merge') })
+      : snapshot?.rebasing === true
+        ? t('branch.finishFirst', { operation: t('operation.rebase') })
+        : snapshot?.reverting === true
+          ? t('branch.finishFirst', { operation: t('operation.revert') })
+          : snapshot?.cherryPicking === true
+            ? t('branch.finishFirst', { operation: t('operation.cherryPick') })
+            : null;
   const selectionKey = selection ? `${selection.side}:${selection.path}:${selection.commit ?? ''}` : '';
 
   const selectionExists =
@@ -5804,7 +6567,7 @@ function GitPanel({ call, t, useWorkspaces, useSessions, sessionId, useTabInfo, 
   }
 
   async function openBranchMenu() {
-    if (snapshot?.repo === false) return;
+    if (branchBusy || snapshot?.repo === false) return;
     if (branchMenu !== null) {
       setBranchMenu(null);
       return;
@@ -5816,6 +6579,265 @@ function GitPanel({ call, t, useWorkspaces, useSessions, sessionId, useTabInfo, 
     } catch (event) {
       setBranchMenu(null);
       setError(failureOf(event));
+    }
+  }
+
+  function finishOperation(kind: 'merge' | 'rebase', info: ActiveOperation | null): void {
+    if (kind === 'merge') {
+      setToast(
+        info === null
+          ? t('toast.mergeFinished')
+          : t('toast.merged', { source: info.source, branch: info.current }),
+      );
+    } else {
+      setToast(
+        info === null
+          ? t('toast.rebaseFinished')
+          : t('toast.rebased', { branch: info.current, source: info.source }),
+      );
+    }
+    setActiveOperation(null);
+  }
+
+  function openMergeDialog(source: string, remote: boolean): void {
+    if (snapshot === null || snapshot.branch.name === null) return;
+    setBranchMenu(null);
+    setNoFastForward(false);
+    setOperationDialog({ kind: 'merge', source, remote, error: null });
+  }
+
+  async function openRebaseDialog(source: string, remote: boolean): Promise<void> {
+    if (repoRoot === null || snapshot === null || snapshot.branch.name === null || branchBusy) return;
+    setBranchMenu(null);
+    setBranchBusy(true);
+    setError(null);
+    try {
+      const preview = await call('rebasePreview', {
+        workspaceId: workspaceId,
+        repo: repoRoot,
+        branch: source,
+      });
+      setOperationDialog({ kind: 'rebase', source, remote, preview, error: null });
+    } catch (event) {
+      setError(failureOf(event));
+    } finally {
+      setBranchBusy(false);
+    }
+  }
+
+  function closeOperationDialog(): void {
+    if (busy === 'merge' || busy === 'rebase') return;
+    setOperationDialog(null);
+  }
+
+  async function confirmMerge(): Promise<void> {
+    const dialog = operationDialog;
+    if (dialog === null || dialog.kind !== 'merge' || busy !== null || repoRoot === null) return;
+    const info: ActiveOperation = {
+      kind: 'merge',
+      source: dialog.source,
+      current: snapshot?.branch.name ?? '',
+      startOid: snapshot?.branch.oid ?? '',
+    };
+    setBusy('merge');
+    setOperationDialog({ ...dialog, error: null });
+    setError(null);
+    try {
+      const result = await call('merge', {
+        workspaceId: workspaceId,
+        repo: repoRoot,
+        branch: dialog.source,
+        noFastForward,
+      });
+      applyStatus(result.status);
+      setOperationDialog(null);
+      setSelection(null);
+      setDiff(null);
+      bumpDiff();
+      if (result.status.merging) {
+        setActiveOperation(info);
+        setMode('changes');
+      } else {
+        setToast(
+          t('toast.merged', {
+            source: dialog.source,
+            branch: result.status.branch.name ?? info.current,
+          }),
+        );
+      }
+    } catch (event) {
+      setOperationDialog({ ...dialog, error: errorMessage(event) });
+      void loadStatus(undefined, false);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function confirmRebase(): Promise<void> {
+    const dialog = operationDialog;
+    if (dialog === null || dialog.kind !== 'rebase' || busy !== null || repoRoot === null) return;
+    if ((snapshot?.entries.length ?? 0) > 0) return;
+    const info: ActiveOperation = {
+      kind: 'rebase',
+      source: dialog.source,
+      current: snapshot?.branch.name ?? '',
+      startOid: snapshot?.branch.oid ?? '',
+    };
+    setBusy('rebase');
+    setOperationDialog({ ...dialog, error: null });
+    setError(null);
+    try {
+      const result = await call('rebase', {
+        workspaceId: workspaceId,
+        repo: repoRoot,
+        branch: dialog.source,
+      });
+      applyStatus(result.status);
+      setOperationDialog(null);
+      setSelection(null);
+      setDiff(null);
+      bumpDiff();
+      if (result.status.rebasing) {
+        setActiveOperation(info);
+        setMode('changes');
+      } else {
+        setToast(
+          t('toast.rebased', {
+            branch: result.status.branch.name ?? info.current,
+            source: dialog.source,
+          }),
+        );
+      }
+    } catch (event) {
+      setOperationDialog({ ...dialog, error: errorMessage(event) });
+      void loadStatus(undefined, false);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function continueOperation(): Promise<void> {
+    if (activeKind === null || busy !== null || conflicts.length > 0 || repoRoot === null) return;
+    const kind = activeKind;
+    const info = operationInfo;
+    setBusy('continue');
+    setError(null);
+    try {
+      const result = await call('operationContinue', { workspaceId: workspaceId, repo: repoRoot });
+      applyStatus(result.status);
+      setSelection(null);
+      setDiff(null);
+      bumpDiff();
+      if (result.status.merging || result.status.rebasing) {
+        if (kind === 'rebase' && result.status.conflicts.length > 0) setToast(t('toast.stoppedAgain'));
+      } else {
+        finishOperation(kind, info);
+      }
+    } catch (event) {
+      setError(failureOf(event));
+      void loadStatus(undefined, false);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function askAbort(): void {
+    if (activeKind === null || busy !== null) return;
+    const kind = activeKind;
+    const info = operationInfo;
+    const body =
+      info === null
+        ? t('abort.genericBody', {
+            operation: kind === 'merge' ? t('operation.merge') : t('operation.rebase'),
+          })
+        : t(kind === 'merge' ? 'abort.mergeBody' : 'abort.rebaseBody', {
+            branch: info.current,
+            hash: shortHash(info.startOid),
+          });
+    setConfirm({
+      title: t(kind === 'merge' ? 'abort.mergeTitle' : 'abort.rebaseTitle'),
+      body,
+      confirmLabel: t(kind === 'merge' ? 'abort.merge' : 'abort.rebase'),
+      danger: true,
+      run: () => void abortOperation(kind),
+    });
+  }
+
+  async function abortOperation(kind: 'merge' | 'rebase'): Promise<void> {
+    if (busy !== null || repoRoot === null) return;
+    setBusy('abort');
+    setError(null);
+    try {
+      const result = await call('operationAbort', { workspaceId: workspaceId, repo: repoRoot });
+      applyStatus(result.status);
+      setActiveOperation(null);
+      setSelection(null);
+      setDiff(null);
+      bumpDiff();
+      setToast(t(kind === 'merge' ? 'toast.mergeAborted' : 'toast.rebaseAborted'));
+    } catch (event) {
+      setError(failureOf(event));
+      void loadStatus(undefined, false);
+    } finally {
+      setBusy(null);
+      setConfirm(null);
+    }
+  }
+
+  function askSkip(): void {
+    if (activeKind !== 'rebase' || busy !== null) return;
+    const stopped = snapshot?.operationCommit ?? '';
+    setConfirm({
+      title: t('skip.title'),
+      body:
+        stopped === ''
+          ? t('skip.body')
+          : h(
+              'div',
+              null,
+              h('div', { className: 'gitp-modal-sub' }, t('skip.body')),
+              h(
+                'div',
+                { className: 'gitp-modal-facts' },
+                h(
+                  'div',
+                  { className: 'gitp-modal-fact' },
+                  h('span', null, t('skip.commit')),
+                  h('b', null, shortHash(stopped)),
+                ),
+              ),
+            ),
+      confirmLabel: t('skip.confirm'),
+      danger: true,
+      run: () => void skipOperation(),
+    });
+  }
+
+  async function skipOperation(): Promise<void> {
+    if (activeKind !== 'rebase' || busy !== null || repoRoot === null) return;
+    setBusy('skip');
+    setError(null);
+    try {
+      const result = await call('rebaseSkip', { workspaceId: workspaceId, repo: repoRoot });
+      applyStatus(result.status);
+      const skipped = result.skipped ?? '';
+      setSelection(null);
+      setDiff(null);
+      bumpDiff();
+      if (result.status.rebasing) {
+        setToast(
+          skipped === '' ? t('toast.commitSkipped') : t('toast.skippedCommit', { hash: shortHash(skipped) }),
+        );
+      } else {
+        setActiveOperation(null);
+        setToast(skipped === '' ? t('toast.skippedDone') : t('toast.skipped', { hash: shortHash(skipped) }));
+      }
+    } catch (event) {
+      setError(failureOf(event));
+      void loadStatus(undefined, false);
+    } finally {
+      setBusy(null);
+      setConfirm(null);
     }
   }
 
@@ -5881,6 +6903,8 @@ function GitPanel({ call, t, useWorkspaces, useSessions, sessionId, useTabInfo, 
     setSelection(null);
     setDiff(null);
     setBranchMenu(null);
+    setActiveOperation(null);
+    setOperationDialog(null);
   }
 
   function askInitAtRoot() {
@@ -5970,6 +6994,19 @@ function GitPanel({ call, t, useWorkspaces, useSessions, sessionId, useTabInfo, 
       },
       syncing,
     }),
+    activeKind === null
+      ? null
+      : h(OperationBanner, {
+          t,
+          kind: activeKind,
+          source: operationInfo?.source ?? null,
+          current: operationInfo?.current ?? null,
+          unresolved: snapshot?.conflicts?.length ?? 0,
+          busy: busy === 'continue' || busy === 'abort' || busy === 'skip',
+          onContinue: () => void continueOperation(),
+          onSkip: askSkip,
+          onAbort: askAbort,
+        }),
     statusError
       ? h(
           'div',
@@ -6101,6 +7138,8 @@ function GitPanel({ call, t, useWorkspaces, useSessions, sessionId, useTabInfo, 
                     canAmend: snapshot.branch?.initial !== true,
                     compact,
                     onBack: () => setSelection(null),
+                    operation: activeKind,
+                    sides: operationSides,
                   }),
       ),
     ),
@@ -6110,7 +7149,12 @@ function GitPanel({ call, t, useWorkspaces, useSessions, sessionId, useTabInfo, 
           branches: branchMenu.branches,
           loading: branchMenu.loading === true,
           busy: branchBusy,
+          current: snapshot?.branch.name ?? null,
+          detached: snapshot?.branch.detached === true,
+          blocked: blockedReason,
           onCheckout: requestCheckout,
+          onMerge: openMergeDialog,
+          onRebase: (name, remote) => void openRebaseDialog(name, remote),
           onNew: () => {
             setBranchMenu(null);
             setBranchError(null);
@@ -6157,6 +7201,35 @@ function GitPanel({ call, t, useWorkspaces, useSessions, sessionId, useTabInfo, 
           },
         })
       : null,
+    operationDialog === null
+      ? null
+      : operationDialog.kind === 'merge'
+        ? h(MergeDialog, {
+            t,
+            source: operationDialog.source,
+            current: snapshot?.branch.name ?? '',
+            remote: operationDialog.remote,
+            noFastForward,
+            busy: busy === 'merge',
+            error: operationDialog.error,
+            onNoFastForward: setNoFastForward,
+            onConfirm: () => void confirmMerge(),
+            onClose: closeOperationDialog,
+          })
+        : h(RebaseDialog, {
+            t,
+            source: operationDialog.source,
+            current: snapshot?.branch.name ?? '',
+            commits: operationDialog.preview.commits,
+            pushed: operationDialog.preview.pushed,
+            upstream: operationDialog.preview.upstream,
+            dirtyCount: snapshot?.entries.length ?? 0,
+            remote: operationDialog.remote,
+            busy: busy === 'rebase',
+            error: operationDialog.error,
+            onConfirm: () => void confirmRebase(),
+            onClose: closeOperationDialog,
+          }),
     confirm
       ? h(ConfirmDialog, {
           title: confirm.title,

@@ -62,9 +62,15 @@ async function loadBundle() {
   const tabTypes = [];
   const slotRegistrations = [];
   const commands = [];
+  const locales = [];
   const ctx = {
     connection: { rpc: { call: async () => ({ ok: true, value: {} }) } },
-    locale: { register() {}, bind: () => (key) => key },
+    locale: {
+      register(namespace, language, dictionary) {
+        locales.push({ namespace, language, dictionary });
+      },
+      bind: () => (key) => key,
+    },
     slots: {
       inject(_name, register) {
         const dispose = register();
@@ -112,7 +118,7 @@ async function loadBundle() {
   };
 
   const module = factory(requireModule);
-  return { dom, module, ctx, tabTypes, slotRegistrations, commands };
+  return { dom, module, ctx, tabTypes, slotRegistrations, commands, locales };
 }
 
 test('AC-001: the bundle exports the plugin entry', async () => {
@@ -207,7 +213,7 @@ function worktreeStatus(payload, entries = []) {
     rebasing: false,
     reverting: false,
     cherryPicking: false,
-    conflicts: [],
+    conflicts: entries.filter((entry) => entry.conflicted).map((entry) => entry.path),
     sessionRoot: root,
     worktree,
     selected: root,
@@ -307,7 +313,7 @@ function emptyDiff(payload) {
  * @returns {Promise<object>} the dom, root, container, calls, store, and re-render.
  */
 async function renderPanel(t, options = {}) {
-  const { dom, module, ctx, slotRegistrations } = await loadBundle();
+  const { dom, module, ctx, slotRegistrations, locales } = await loadBundle();
   module.apply(ctx);
   const body = slotRegistrations.find(
     (entry) => entry.spec.name === 'sidebar.right.pane.tab' && entry.spec.key === 'dsh-git',
@@ -325,12 +331,69 @@ async function renderPanel(t, options = {}) {
   });
   const calls = [];
   const store = { session: options.session ?? { cwd: MAIN_DIR } };
-  const state = { entries: (options.entries ?? []).map((entry) => ({ ...entry })) };
-  const snapshot = (payload) => worktreeStatus({ repo: payload.repo }, state.entries);
+  const state = {
+    entries: (options.entries ?? []).map((entry) => ({ ...entry })),
+    operation: options.operation ?? null,
+  };
+  const branches = options.branches ?? [
+    { name: 'main', current: true, upstream: null, remote: false, worktree: null },
+    { name: 'feature', current: false, upstream: null, remote: false, worktree: null },
+    { name: 'origin/release/0.24', current: false, upstream: null, remote: true, worktree: null },
+  ];
+  const snapshot = (payload) => {
+    const next = worktreeStatus(payload, state.entries);
+    next.merging = state.operation !== null && state.operation.kind === 'merge';
+    next.rebasing = state.operation !== null && state.operation.kind === 'rebase';
+    next.operationCommit = state.operation?.commit ?? null;
+    return next;
+  };
   const call = async (endpoint, payload) => {
     calls.push({ endpoint, payload });
-    if (endpoint === 'status') return worktreeStatus(payload, state.entries);
+    if (endpoint === 'status') return snapshot(payload);
     if (endpoint === 'diff') return options.diff === undefined ? emptyDiff(payload) : options.diff(payload);
+    if (endpoint === 'branches') return { branches };
+    if (endpoint === 'rebasePreview') {
+      return options.preview ?? { commits: 2, pushed: 1, upstream: 'origin/feature' };
+    }
+    if (endpoint === 'merge' || endpoint === 'rebase') {
+      state.operation = {
+        kind: endpoint,
+        source: payload.branch,
+        current: 'main',
+        commit: endpoint === 'rebase' ? 'abc1234' : null,
+      };
+      for (const filePath of options.conflicts ?? ['conflict.txt']) {
+        if (!state.entries.some((entry) => entry.path === filePath)) {
+          state.entries.push(
+            statusEntry(filePath, {
+              kind: 'unmerged',
+              index: 'U',
+              worktree: 'U',
+              letter: 'U',
+              conflicted: true,
+              staged: true,
+            }),
+          );
+        }
+      }
+      return {
+        output: '',
+        status: snapshot(payload),
+        conflicted: state.entries.filter((entry) => entry.conflicted).map((entry) => entry.path),
+      };
+    }
+    if (endpoint === 'resolve') {
+      state.entries = state.entries.map((entry) =>
+        entry.path === payload.path
+          ? { ...entry, conflicted: false, staged: true, unstaged: false, index: 'M', worktree: ' ' }
+          : entry,
+      );
+      return snapshot(payload);
+    }
+    if (endpoint === 'operationAbort' || endpoint === 'operationContinue' || endpoint === 'rebaseSkip') {
+      state.operation = null;
+      return { output: '', status: snapshot(payload) };
+    }
     if (endpoint === 'stage') {
       const paths = new Set(payload.paths);
       state.entries = state.entries.map((entry) =>
@@ -366,7 +429,7 @@ async function renderPanel(t, options = {}) {
   };
   const props = {
     call,
-    t: (key) => key,
+    t: options.t ?? ((key) => key),
     sessionId: 'session-1',
     sidebarRight: ctx.sidebarRight,
     useTabInfo: () => ({ tab: { id: 'dsh-git', visible: true }, panel: { id: 'pane-1' } }),
@@ -404,7 +467,7 @@ async function renderPanel(t, options = {}) {
   const render = () => root.render(React.createElement(body.component, props));
   render();
   await new Promise((resolve) => setTimeout(resolve, 40));
-  return { dom, root, container, calls, store, state, render };
+  return { dom, root, container, calls, store, state, render, locales };
 }
 
 test('AC-080: the panel sends the Session working directory and opens its worktree', async (t) => {
@@ -1036,4 +1099,306 @@ test('AC-119: the conflict and binary views render no tokens', async (t) => {
   });
   await until(() => binary.container.querySelector('.gitp-binary') !== null, 'the binary view renders');
   assert.equal(binary.container.querySelector('[class*="gitp-hl-"]'), null, 'no tokens in the binary view');
+});
+
+/**
+ * Interpolate the key and its values the way the real translator does, so a
+ * test can prove a branch name reaches the UI.
+ * @param {string} key the locale key.
+ * @param {Record<string, string | number>} [values] the interpolation values.
+ * @returns {string} the rendered text.
+ */
+function tv(key, values) {
+  return values === undefined ? key : `${key} ${Object.values(values).join(' ')}`;
+}
+
+/**
+ * Open the branch menu from the panel header.
+ * @param {object} panel the rendered panel.
+ * @returns {Promise<void>} resolves once the rows render.
+ */
+async function openBranchMenu(panel) {
+  panel.container.querySelector('.gitp-branch:not(.gitp-repo-pick)').click();
+  await until(() => panel.container.querySelector('.gitp-branch-actions') !== null, 'branch rows render');
+}
+
+/**
+ * Find one branch row by its visible name.
+ * @param {object} panel the rendered panel.
+ * @param {string} name the branch name.
+ * @returns {Element | undefined} the row.
+ */
+function branchRow(panel, name) {
+  return [...panel.container.querySelectorAll('.gitp-branch-row')].find((row) => row.textContent.includes(name));
+}
+
+/**
+ * Open the action pane for one branch.
+ * @param {object} panel the rendered panel.
+ * @param {string} name the branch name.
+ * @returns {Promise<void>} resolves once the pane renders.
+ */
+async function openBranchActions(panel, name) {
+  const row = branchRow(panel, name);
+  assert.notEqual(row, undefined, `the ${name} row renders`);
+  row.querySelector('.gitp-branch-actions').click();
+  await until(() => panel.container.querySelector('.gitp-branch-pane') !== null, 'the action pane renders');
+}
+
+/**
+ * Open the merge dialog for the feature branch.
+ * @param {object} panel the rendered panel.
+ * @returns {Promise<void>} resolves once the dialog renders.
+ */
+async function openMergeDialog(panel) {
+  await openBranchMenu(panel);
+  await openBranchActions(panel, 'feature');
+  panel.container.querySelector('[data-action="merge"]').click();
+  await until(() => panel.container.querySelector('.gitp-modal') !== null, 'the merge dialog renders');
+}
+
+/**
+ * Open the rebase dialog for the feature branch.
+ * @param {object} panel the rendered panel.
+ * @returns {Promise<void>} resolves once the dialog renders.
+ */
+async function openRebaseDialog(panel) {
+  await openBranchMenu(panel);
+  await openBranchActions(panel, 'feature');
+  panel.container.querySelector('[data-action="rebase"]').click();
+  await until(() => panel.container.querySelector('.gitp-modal') !== null, 'the rebase dialog renders');
+}
+
+/**
+ * Confirm the open branch operation dialog.
+ * @param {object} panel the rendered panel.
+ * @param {string} endpoint the merge endpoint or the rebase endpoint.
+ * @returns {Promise<void>} resolves once the banner renders.
+ */
+async function startOperation(panel, endpoint) {
+  panel.container.querySelector('.gitp-modal-actions .is-primary').click();
+  await until(() => panel.container.querySelector('.gitp-opbanner') !== null, 'the operation banner renders');
+  assert.equal(panel.calls.filter((entry) => entry.endpoint === endpoint).length, 1);
+}
+
+/**
+ * Return a conflict diff for the selected file.
+ * @param {object} payload the diff request.
+ * @returns {object} the conflict payload.
+ */
+function conflictDiff(payload) {
+  return {
+    ...emptyDiff(payload),
+    conflict: true,
+    right: ['<<<<<<< HEAD', 'one', '=======', 'two', '>>>>>>> feature'],
+    labels: { left: 'HEAD', right: 'Incoming' },
+  };
+}
+
+test('AC-111: the branch menu offers Merge and Rebase and disables the rows during an operation', async (t) => {
+  const panel = await renderPanel(t, { t: tv });
+  await openBranchMenu(panel);
+  assert.equal(branchRow(panel, 'main').querySelector('.gitp-branch-actions'), null, 'the current branch has no action button');
+  await openBranchActions(panel, 'feature');
+  const mergeRow = panel.container.querySelector('[data-action="merge"]');
+  const rebaseRow = panel.container.querySelector('[data-action="rebase"]');
+  assert.notEqual(mergeRow, null);
+  assert.notEqual(rebaseRow, null);
+  assert.equal(mergeRow.disabled, false);
+  assert.equal(rebaseRow.disabled, false);
+  assert.match(mergeRow.textContent, /branch\.mergeInto main/);
+  assert.match(rebaseRow.textContent, /branch\.rebaseOnto main feature/);
+
+  const busy = await renderPanel(t, {
+    t: tv,
+    operation: { kind: 'merge', source: 'feature', current: 'main' },
+  });
+  await openBranchMenu(busy);
+  const row = branchRow(busy, 'feature');
+  assert.equal(row.querySelector('.gitp-branch-pick').disabled, true, 'the branch row is disabled');
+  await openBranchActions(busy, 'feature');
+  assert.equal(busy.container.querySelector('[data-action="merge"]').disabled, true);
+  assert.equal(busy.container.querySelector('[data-action="rebase"]').disabled, true);
+  assert.match(busy.container.querySelector('[data-action="merge"]').title, /branch\.finishFirst/);
+});
+
+test('AC-112: both dialogs state their effect and Cancel sends no operation request', async (t) => {
+  const panel = await renderPanel(t, { t: tv });
+  await openMergeDialog(panel);
+  assert.notEqual(panel.container.querySelector('.gitp-dialog-option input[type="checkbox"]'), null);
+  assert.match(panel.container.querySelector('.gitp-modal-facts').textContent, /merge\.sourceLabel/);
+  assert.equal(panel.container.querySelector('.gitp-modal-fact b').textContent, 'feature');
+  panel.container.querySelector('.gitp-modal-actions .gitp-btn:not(.is-primary)').click();
+  await until(() => panel.container.querySelector('.gitp-modal') === null, 'the merge dialog closes');
+  assert.equal(panel.calls.filter((entry) => entry.endpoint === 'merge').length, 0, 'Cancel sends no merge');
+
+  await openRebaseDialog(panel);
+  const caution = panel.container.querySelector('.gitp-modal-warn.is-caution');
+  assert.notEqual(caution, null, 'the pushed-commit warning renders');
+  assert.match(caution.textContent, /rebase\.pushedWarn/);
+  assert.match(caution.textContent, /origin\/feature/);
+  assert.ok(panel.calls.some((entry) => entry.endpoint === 'rebasePreview'), 'the dialog reads the preview');
+  panel.container.querySelector('.gitp-modal-actions .gitp-btn:not(.is-primary)').click();
+  await until(() => panel.container.querySelector('.gitp-modal') === null, 'the rebase dialog closes');
+  assert.equal(panel.calls.filter((entry) => entry.endpoint === 'rebase').length, 0, 'Cancel sends no rebase');
+});
+
+test('AC-113 and AC-127: the banner counts conflicts and replaces the commit box', async (t) => {
+  const panel = await renderPanel(t, { t: tv, diff: conflictDiff });
+  await openMergeDialog(panel);
+  await startOperation(panel, 'merge');
+
+  const title = panel.container.querySelector('.gitp-opbanner-title').textContent;
+  assert.match(title, /op\.merge feature main/);
+  assert.match(panel.container.querySelector('.gitp-opbanner-meta').textContent, /op\.unresolvedCountOne/);
+  const continueButton = panel.container.querySelector('[aria-label="op.continue"]');
+  assert.notEqual(continueButton, null);
+  assert.equal(continueButton.disabled, true, 'Continue is blocked by the conflict');
+  assert.equal(panel.container.querySelector('[aria-label="op.skip"]'), null, 'a merge has no Skip');
+  assert.notEqual(panel.container.querySelector('[aria-label="op.abort"]'), null);
+  assert.notEqual(panel.container.querySelector('.gitp-commitbox.is-hidden'), null, 'the commit box is hidden');
+  assert.match(panel.container.querySelector('.gitp-opfoot').textContent, /opFoot\.merge/);
+
+  await until(() => panel.container.querySelector('.gitp-filerow') !== null, 'the conflict row renders');
+  panel.container.querySelector('.gitp-filerow').click();
+  await until(() => panel.container.querySelector('.gitp-conflict-banner') !== null, 'the conflict view renders');
+  const sides = [...panel.container.querySelectorAll('.gitp-conflict-actions .gitp-btn')];
+  assert.match(sides[0].textContent, /conflict\.take main/);
+  assert.match(sides[1].textContent, /conflict\.take feature/);
+  assert.match(panel.container.querySelector('.gitp-conflict-sides').textContent, /conflict\.sides main feature/);
+
+  sides[0].click();
+  await until(
+    () => panel.container.querySelector('.gitp-opbanner-meta').textContent.includes('op.allResolved'),
+    'the banner reports the resolved state',
+  );
+  const resolvedContinue = panel.container.querySelector('[aria-label="op.continue"]');
+  assert.equal(resolvedContinue.disabled, false, 'Continue is enabled after staging the conflict');
+});
+
+test('AC-114, AC-128 and AC-129: Abort confirms, clears the banner, and the rebase sides swap', async (t) => {
+  const panel = await renderPanel(t, { t: tv, diff: conflictDiff });
+  await openRebaseDialog(panel);
+  await startOperation(panel, 'rebase');
+  assert.match(panel.container.querySelector('.gitp-opbanner-title').textContent, /op\.rebase main feature/);
+  assert.notEqual(panel.container.querySelector('[aria-label="op.skip"]'), null, 'a rebase offers Skip');
+  assert.equal(panel.container.querySelector('[aria-label="op.continue"]').disabled, true);
+
+  await until(() => panel.container.querySelector('.gitp-filerow') !== null, 'the conflict row renders');
+  panel.container.querySelector('.gitp-filerow').click();
+  await until(() => panel.container.querySelector('.gitp-conflict-banner') !== null, 'the conflict view renders');
+  const sides = [...panel.container.querySelectorAll('.gitp-conflict-actions .gitp-btn')];
+  assert.match(sides[0].textContent, /conflict\.take feature/);
+  assert.match(sides[1].textContent, /conflict\.take main/);
+  assert.match(panel.container.querySelector('.gitp-conflict-sides').textContent, /conflict\.sidesRebase feature main/);
+
+  panel.container.querySelector('[aria-label="op.abort"]').click();
+  await until(() => panel.container.querySelector('.gitp-modal-title') !== null, 'the abort confirm renders');
+  assert.equal(panel.container.querySelector('.gitp-modal-title').textContent, 'abort.rebaseTitle');
+  panel.container.querySelector('.gitp-modal-actions .gitp-btn:not(.is-danger)').click();
+  await until(() => panel.container.querySelector('.gitp-modal') === null, 'the abort confirm closes');
+  assert.equal(panel.calls.filter((entry) => entry.endpoint === 'operationAbort').length, 0, 'Cancel sends no abort');
+  assert.notEqual(panel.container.querySelector('.gitp-opbanner'), null, 'the banner stays after Cancel');
+
+  panel.container.querySelector('[aria-label="op.skip"]').click();
+  await until(() => panel.container.querySelector('.gitp-modal-title') !== null, 'the skip confirm renders');
+  assert.equal(panel.container.querySelector('.gitp-modal-title').textContent, 'skip.title');
+  assert.match(panel.container.querySelector('.gitp-modal-facts').textContent, /skip\.commit/);
+  assert.match(panel.container.querySelector('.gitp-modal-facts').textContent, /abc1234/);
+  panel.container.querySelector('.gitp-modal-actions .gitp-btn:not(.is-danger)').click();
+  await until(() => panel.container.querySelector('.gitp-modal') === null, 'the skip confirm closes');
+  assert.equal(panel.calls.filter((entry) => entry.endpoint === 'rebaseSkip').length, 0, 'Cancel sends no skip');
+
+  panel.container.querySelector('[aria-label="op.abort"]').click();
+  await until(() => panel.container.querySelector('.gitp-modal-title') !== null, 'the abort confirm returns');
+  panel.container.querySelector('.gitp-modal-actions .is-danger').click();
+  await until(() => panel.container.querySelector('.gitp-opbanner') === null, 'the abort clears the banner');
+  assert.equal(panel.container.querySelector('.gitp-commitbox.is-hidden'), null, 'the commit box returns');
+  assert.match(panel.container.querySelector('.gitp-toast').textContent, /toast\.rebaseAborted/);
+});
+
+test('AC-130: an operation started outside the panel shows a generic banner', async (t) => {
+  const panel = await renderPanel(t, {
+    t: tv,
+    operation: { kind: 'rebase', source: null, current: null },
+    entries: [
+      statusEntry('conflict.txt', {
+        kind: 'unmerged',
+        conflicted: true,
+        index: 'U',
+        worktree: 'U',
+        letter: 'U',
+        staged: true,
+      }),
+    ],
+  });
+  await until(() => panel.container.querySelector('.gitp-opbanner') !== null, 'the banner renders from status');
+  assert.equal(panel.container.querySelector('.gitp-opbanner-title').textContent, 'op.rebaseGeneric');
+  assert.match(panel.container.querySelector('.gitp-opbanner-meta').textContent, /op\.unresolvedCountOne/);
+  assert.notEqual(panel.container.querySelector('[aria-label="op.skip"]'), null);
+  assert.equal(panel.container.querySelector('[aria-label="op.continue"]').disabled, true);
+
+  panel.container.querySelector('[aria-label="op.abort"]').click();
+  await until(() => panel.container.querySelector('.gitp-modal-title') !== null, 'the generic abort confirm renders');
+  assert.equal(panel.container.querySelector('.gitp-modal-title').textContent, 'abort.rebaseTitle');
+  assert.match(panel.container.querySelector('.gitp-modal-sub').textContent, /abort\.genericBody/);
+  panel.container.querySelector('.gitp-modal-actions .is-danger').click();
+  await until(() => panel.container.querySelector('.gitp-opbanner') === null, 'the banner clears');
+  assert.match(panel.container.querySelector('.gitp-toast').textContent, /toast\.rebaseAborted/);
+});
+
+test('AC-115: the new strings exist in English and Chinese and the controls name themselves', async (t) => {
+  const panel = await renderPanel(t, { t: tv });
+  const english = panel.locales.find((entry) => entry.language === 'en');
+  const chinese = panel.locales.find((entry) => entry.language === 'zh');
+  assert.notEqual(english, undefined);
+  assert.notEqual(chinese, undefined);
+  const keys = [
+    'branch.actions',
+    'branch.actionsFor',
+    'branch.mergeInto',
+    'branch.rebaseOnto',
+    'branch.finishFirst',
+    'merge.title',
+    'merge.noFF',
+    'rebase.title',
+    'rebase.pushedWarn',
+    'rebase.dirtyWarn',
+    'op.merge',
+    'op.rebase',
+    'op.continue',
+    'op.skip',
+    'op.abort',
+    'abort.mergeTitle',
+    'skip.title',
+    'conflict.take',
+    'conflict.sides',
+    'conflict.sidesRebase',
+    'opFoot.merge',
+    'toast.merged',
+  ];
+  for (const key of keys) {
+    assert.equal(typeof english.dictionary[key], 'string', `EN has ${key}`);
+    assert.equal(typeof chinese.dictionary[key], 'string', `ZH has ${key}`);
+  }
+  assert.deepEqual(
+    Object.keys(chinese.dictionary).sort(),
+    Object.keys(english.dictionary).sort(),
+    'the two dictionaries cover the same keys',
+  );
+
+  await openBranchMenu(panel);
+  const kebab = branchRow(panel, 'feature').querySelector('.gitp-branch-actions');
+  assert.notEqual(kebab.getAttribute('aria-label'), null);
+  assert.equal(kebab.getAttribute('aria-label'), kebab.title);
+  await openBranchActions(panel, 'feature');
+  panel.container.querySelector('[data-action="merge"]').click();
+  await until(() => panel.container.querySelector('.gitp-modal') !== null, 'the merge dialog renders');
+  panel.container.querySelector('.gitp-modal-actions .is-primary').click();
+  await until(() => panel.container.querySelector('.gitp-opbanner') !== null, 'the banner renders');
+  for (const label of ['op.continue', 'op.abort']) {
+    const button = panel.container.querySelector(`[aria-label="${label}"]`);
+    assert.notEqual(button, null, `${label} names its button`);
+    assert.notEqual(button.title, '', `${label} has a title`);
+  }
 });
