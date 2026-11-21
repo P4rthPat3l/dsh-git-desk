@@ -934,6 +934,118 @@ test('AC-101: the unified diff has no pane divider', async (t) => {
 });
 
 /**
+ * Build a 10-row diff with one modified, one deleted, and one added block,
+ * for the scrollbar-mark cases.
+ * @param payload the diff request.
+ * @returns the payload.
+ */
+function marksDiff(payload) {
+  return {
+    ...emptyDiff(payload),
+    path: payload.path,
+    left: ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'],
+    right: ['one', 'TWO', 'three', 'four', 'five', 'six', 'seven+', 'eight', 'nine'],
+    rows: [
+      { l: 1, r: 1, k: 'ctx' },
+      { l: 2, r: 2, k: 'mod' },
+      { l: 3, r: 3, k: 'ctx' },
+      { l: 4, r: 4, k: 'ctx' },
+      { l: 5, r: 5, k: 'ctx' },
+      { l: 6, r: null, k: 'del' },
+      { l: 7, r: 6, k: 'ctx' },
+      { l: null, r: 7, k: 'add' },
+      { l: 8, r: 8, k: 'ctx' },
+      { l: 9, r: 9, k: 'ctx' },
+    ],
+    blocks: [
+      { id: 'b1', leftStart: 2, leftEnd: 2, rightStart: 2, rightEnd: 2, kind: 'mod', row: 1 },
+      { id: 'b2', leftStart: 6, leftEnd: 6, rightStart: 6, rightEnd: 5, kind: 'del', row: 5 },
+      { id: 'b3', leftStart: 7, leftEnd: 6, rightStart: 7, rightEnd: 7, kind: 'add', row: 7 },
+    ],
+    add: 2,
+    del: 2,
+  };
+}
+
+test('AC-131 and AC-134: the split diff marks every change block on a rail outside the panes', async (t) => {
+  const panel = await openDiff(t, { entries: [statusEntry('marks.txt')], diff: marksDiff });
+  const panes = panel.container.querySelector('.gitp-panes');
+  assert.notEqual(panes, null);
+  const rail = panes.querySelector('.gitp-marks');
+  assert.notEqual(rail, null, 'the rail renders on the scroll area');
+  assert.equal(rail.parentElement, panes, 'the rail is a sibling of the panes');
+  assert.equal(rail.getAttribute('aria-hidden'), 'true', 'the rail is decorative');
+  assert.equal(panel.container.querySelector('.gitp-pane .gitp-marks'), null, 'the rail is not inside a scroller');
+
+  const ticks = [...rail.querySelectorAll('.gitp-mark')];
+  assert.deepEqual(
+    ticks.map((tick) => tick.className),
+    ['gitp-mark is-mod', 'gitp-mark is-del', 'gitp-mark is-add'],
+    'one tick per block, in file order, colored by kind',
+  );
+  assert.deepEqual(ticks.map((tick) => tick.style.top), ['10%', '50%', '70%'], 'the top follows the block row');
+  assert.deepEqual(ticks.map((tick) => tick.style.height), ['10%', '10%', '10%'], 'the height follows the block rows');
+  assert.deepEqual(
+    ticks.map((tick) => tick.style.minHeight),
+    ['2px', '2px', '2px'],
+    'a one-row block keeps a visible tick',
+  );
+});
+
+test('AC-133: the unified diff maps a modified block to its removed and added line', async (t) => {
+  const panel = await openDiff(t, { entries: [statusEntry('marks.txt')], diff: marksDiff });
+  panel.container.querySelector('[aria-label="diff.unified"]').click();
+  await until(() => panel.container.querySelector('.gitp-unified') !== null, 'the unified diff renders');
+
+  const view = panel.container.querySelector('.gitp-diff-view');
+  assert.notEqual(view, null, 'the scroller sits in the marked view');
+  const rail = view.querySelector('.gitp-marks');
+  assert.notEqual(rail, null, 'one rail serves the single pane');
+  assert.equal(rail.parentElement, view, 'the rail is a sibling of the scroller');
+  assert.equal(panel.container.querySelector('.gitp-unified .gitp-marks'), null, 'the rail never scrolls with the code');
+  assert.equal(panel.container.querySelectorAll('.gitp-unified').length, 1, 'the view stays a single pane');
+
+  const ticks = [...rail.querySelectorAll('.gitp-mark')];
+  assert.deepEqual(
+    ticks.map((tick) => tick.className),
+    ['gitp-mark is-mod', 'gitp-mark is-del', 'gitp-mark is-add'],
+    'a modified block keeps its own tone',
+  );
+  assert.deepEqual(
+    ticks.map((tick) => tick.style.top),
+    ['9.091%', '54.545%', '72.727%'],
+    'the top counts rendered lines',
+  );
+  assert.deepEqual(
+    ticks.map((tick) => tick.style.height),
+    ['18.182%', '9.091%', '9.091%'],
+    'the modified tick spans both lines',
+  );
+});
+
+test('AC-132: change marks read their color from the host theme', async (t) => {
+  const panel = await openDiff(t, { entries: [statusEntry('marks.txt')], diff: marksDiff });
+  const sheet = panel.dom.window.document.querySelector('style[data-plugin-css="dsh-git-desk/styles"]');
+  assert.notEqual(sheet, null, 'the plugin stylesheet installs once at module scope');
+  const rules = sheet.textContent.split('}').filter((rule) => rule.includes('.gitp-mark'));
+  assert.ok(rules.length >= 4, 'the rail and its three tones are in the stylesheet');
+  for (const rule of rules) {
+    assert.doesNotMatch(rule, /#[0-9a-fA-F]{3,8}/, `${rule.trim()} holds no literal color`);
+    if (!rule.includes('background:')) continue;
+    assert.match(rule, /background:var\(--dsw-/, `${rule.trim()} reads a theme variable`);
+  }
+});
+
+test('AC-135: a diff with no blocks draws no marks', async (t) => {
+  const panel = await openDiff(t, {
+    entries: [statusEntry('empty.txt')],
+    diff: (payload) => emptyDiff(payload),
+  });
+  assert.notEqual(panel.container.querySelector('.gitp-panes'), null, 'the split diff still renders');
+  assert.equal(panel.container.querySelector('.gitp-marks'), null, 'a diff with no blocks has no rail');
+});
+
+/**
  * Build a TypeScript diff with one changed line, for the highlighting cases.
  * @param payload the diff request.
  * @returns the payload.
@@ -1091,6 +1203,7 @@ test('AC-119: the conflict and binary views render no tokens', async (t) => {
   });
   await until(() => conflict.container.querySelector('.gitp-urow') !== null, 'the conflict view renders');
   assert.equal(conflict.container.querySelector('[class*="gitp-hl-"]'), null, 'no tokens in the conflict view');
+  assert.equal(conflict.container.querySelector('.gitp-marks'), null, 'the conflict view draws no marks');
   assert.match(conflict.container.querySelector('.gitp-unified').textContent, /const value = 1;/);
 
   const binary = await openDiff(t, {
@@ -1099,6 +1212,7 @@ test('AC-119: the conflict and binary views render no tokens', async (t) => {
   });
   await until(() => binary.container.querySelector('.gitp-binary') !== null, 'the binary view renders');
   assert.equal(binary.container.querySelector('[class*="gitp-hl-"]'), null, 'no tokens in the binary view');
+  assert.equal(binary.container.querySelector('.gitp-marks'), null, 'the binary view draws no marks');
 });
 
 /**

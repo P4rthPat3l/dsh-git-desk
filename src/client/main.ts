@@ -1595,6 +1595,7 @@ button[data-forge-header]{display:none}
 .gitp-btn .gitp-spinner{width:12px;height:12px;border-width:1.5px;border-color:currentColor;border-top-color:transparent;opacity:.8}
 .gitp-diffcol{display:flex;flex:1;min-width:0;min-height:0;flex-direction:column;background:var(--dsw-alias-bg-base)}
 .gitp-diff{display:flex;flex-direction:column;flex:1;min-height:0;min-width:0}
+.gitp-diff-view{position:relative;display:flex;flex:1;min-width:0;min-height:0}
 .gitp-diff-head{display:flex;align-items:center;gap:8px;height:44px;padding:0 8px 0 12px;border-bottom:1px solid var(--dsw-alias-border-l1);flex:none}
 .gitp-diff-title{display:flex;align-items:center;gap:8px;flex:1;min-width:0;overflow:hidden;white-space:nowrap}
 .gitp-diff-path{display:block;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:13px}
@@ -1654,7 +1655,12 @@ button[data-forge-header]{display:none}
 .gitp-hl-heading{font-weight:600;color:var(--dsw-alias-label-primary)}
 .gitp-hl-emphasis{font-style:italic}
 .gitp-hl-strong{font-weight:700}
-.gitp-unified{flex:1;min-height:0;overflow:auto;font-family:var(--gitp-mono);font-size:12px;line-height:20px}
+.gitp-unified{flex:1;min-width:0;min-height:0;overflow:auto;font-family:var(--gitp-mono);font-size:12px;line-height:20px}
+.gitp-marks{position:absolute;top:0;right:0;bottom:0;width:8px;pointer-events:none;z-index:3}
+.gitp-mark{position:absolute;left:2px;right:2px;border-radius:1px}
+.gitp-mark.is-add{background:var(--dsw-alias-file-diff-added-marker,var(--dsw-alias-state-success-primary))}
+.gitp-mark.is-del{background:var(--dsw-alias-file-diff-deleted-marker,var(--dsw-alias-state-error-primary))}
+.gitp-mark.is-mod{background:var(--dsw-alias-state-business-primary)}
 .gitp-uarrows{position:sticky;left:0;width:52px;flex:none;display:flex;align-items:center;justify-content:center;gap:2px;background:var(--dsw-alias-bg-base);z-index:2}
 .gitp-urow.is-conflict-marker{background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 14%,transparent);color:var(--dsw-alias-state-error-primary);font-weight:600}
 .gitp-uno{width:40px;flex:none;text-align:right;padding-right:8px;color:var(--dsw-alias-label-dimmed,var(--dsw-alias-label-tertiary));font-size:11px;user-select:none}
@@ -3636,6 +3642,70 @@ function ConflictDiff({ diff }: { diff: DiffPayload }) {
   );
 }
 
+/** The color family of one change mark on the diff scrollbar. */
+type ChangeTone = 'add' | 'del' | 'mod';
+
+/** One changed region, in display lines, for the scrollbar rail. */
+interface ChangeMark {
+  start: number;
+  span: number;
+  tone: ChangeTone;
+}
+
+/**
+ * Group consecutive changed display lines into one mark each. The unified diff
+ * expands a modified row into two lines, so the caller passes one tone per
+ * rendered line rather than one per diff row.
+ * @param tones the tone of every display line, `ctx` for unchanged.
+ * @returns the marks, in display order.
+ */
+function collectMarks(tones: Array<'ctx' | ChangeTone>): ChangeMark[] {
+  const marks: ChangeMark[] = [];
+  for (let index = 0; index < tones.length; index += 1) {
+    if (tones[index] === 'ctx') continue;
+    const start = index;
+    while (index < tones.length && tones[index] !== 'ctx') index += 1;
+    const tone = tones[start];
+    if (tone !== undefined && tone !== 'ctx') marks.push({ start, span: index - start, tone });
+  }
+  return marks;
+}
+
+/**
+ * Scale one display count to the rail height, rounded so a style attribute
+ * stays short.
+ * @param part the display count.
+ * @param total the whole diff's display lines.
+ * @returns a percentage.
+ */
+function railPercent(part: number, total: number): number {
+  return Math.round((part / total) * 100000) / 1000;
+}
+
+/**
+ * Draw every change block on the right edge of the diff scroll area, the way
+ * an editor marks changed lines on its scrollbar. The rail is decorative: it
+ * takes no pointer events and the change navigation keeps its buttons.
+ */
+function ChangeMarks({ marks, total }: { marks: ChangeMark[]; total: number }) {
+  if (marks.length === 0 || total <= 0) return null;
+  return h(
+    'div',
+    { className: 'gitp-marks', 'aria-hidden': 'true' },
+    marks.map((mark) =>
+      h('div', {
+        className: `gitp-mark is-${mark.tone}`,
+        key: mark.start,
+        style: {
+          top: `${railPercent(mark.start, total)}%`,
+          height: `${railPercent(mark.span, total)}%`,
+          minHeight: 2,
+        },
+      }),
+    ),
+  );
+}
+
 interface BlockAction {
   action: string;
   icon: string;
@@ -3713,6 +3783,16 @@ function SplitDiff({ t, diff, labels, tokens, onBlock, busy, selectionKey, renam
     for (const block of diff.blocks) map.set(block.row, block);
     return map;
   }, [diff]);
+
+  const marks = useMemo(
+    () =>
+      collectMarks(
+        diff.rows.map((row, index): 'ctx' | ChangeTone =>
+          row.k === 'ctx' ? 'ctx' : (blocksByRow.get(index)?.kind ?? row.k),
+        ),
+      ),
+    [diff, blocksByRow],
+  );
 
   const actions = (block: DiffBlock): BlockAction[] => {
     if (renamed) return [];
@@ -3840,6 +3920,7 @@ function SplitDiff({ t, diff, labels, tokens, onBlock, busy, selectionKey, renam
           );
         }),
       ),
+      h(ChangeMarks, { marks, total: diff.rows.length }),
     ),
   );
 }
@@ -3951,7 +4032,7 @@ interface UnifiedLine {
   l: number | null;
   r: number | null;
   text: string;
-  kind: string;
+  kind: 'ctx' | 'add' | 'del';
   block?: DiffBlock;
 }
 
@@ -3977,6 +4058,15 @@ function UnifiedDiff({ t, diff, tokens, onBlock, busy, selectionKey, renamed }: 
     });
     return result;
   }, [diff]);
+  const marks = useMemo(
+    () =>
+      collectMarks(
+        lines.map((line): 'ctx' | ChangeTone =>
+          line.kind === 'ctx' ? 'ctx' : (line.block?.kind ?? line.kind),
+        ),
+      ),
+    [lines],
+  );
   const scroller = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const first = lines.find((line) => line.block !== undefined);
@@ -3995,42 +4085,47 @@ function UnifiedDiff({ t, diff, tokens, onBlock, busy, selectionKey, renamed }: 
   };
   return h(
     'div',
-    { className: 'gitp-unified', ref: scroller, tabIndex: 0, role: 'region', 'aria-label': t('diff.unified') },
-    lines.map((line, index) => {
-      const list = line.block ? actions(line.block) : [];
-      return h(
-        'div',
-        { className: cx('gitp-urow', line.kind !== 'ctx' && `is-${line.kind}`), key: index },
-        h(
-          'span',
-          { className: 'gitp-uarrows' },
-          list.map((item) =>
-            h(
-              'button',
-              {
-                type: 'button',
-                className: cx('gitp-arrow', item.revert && 'is-revert'),
-                key: item.action,
-                'aria-label': item.label,
-                title: item.label,
-                disabled: busy,
-                onClick: () => {
-                  if (line.block !== undefined) onBlock(line.block, item.action);
+    { className: 'gitp-diff-view' },
+    h(
+      'div',
+      { className: 'gitp-unified', ref: scroller, tabIndex: 0, role: 'region', 'aria-label': t('diff.unified') },
+      lines.map((line, index) => {
+        const list = line.block ? actions(line.block) : [];
+        return h(
+          'div',
+          { className: cx('gitp-urow', line.kind !== 'ctx' && `is-${line.kind}`), key: index },
+          h(
+            'span',
+            { className: 'gitp-uarrows' },
+            list.map((item) =>
+              h(
+                'button',
+                {
+                  type: 'button',
+                  className: cx('gitp-arrow', item.revert && 'is-revert'),
+                  key: item.action,
+                  'aria-label': item.label,
+                  title: item.label,
+                  disabled: busy,
+                  onClick: () => {
+                    if (line.block !== undefined) onBlock(line.block, item.action);
+                  },
                 },
-              },
-              h(Icon, { path: item.icon, size: 12 }),
+                h(Icon, { path: item.icon, size: 12 }),
+              ),
             ),
           ),
-        ),
-        h('span', { className: 'gitp-uno' }, line.l ?? ''),
-        h('span', { className: 'gitp-uno' }, line.r ?? ''),
-        h(
-          'span',
-          { className: 'gitp-ucontent' },
-          renderCode(tokensOf(line.l !== null ? tokens.left : tokens.right, line.l ?? line.r), line.text, null),
-        ),
-      );
-    }),
+          h('span', { className: 'gitp-uno' }, line.l ?? ''),
+          h('span', { className: 'gitp-uno' }, line.r ?? ''),
+          h(
+            'span',
+            { className: 'gitp-ucontent' },
+            renderCode(tokensOf(line.l !== null ? tokens.left : tokens.right, line.l ?? line.r), line.text, null),
+          ),
+        );
+      }),
+    ),
+    h(ChangeMarks, { marks, total: lines.length }),
   );
 }
 

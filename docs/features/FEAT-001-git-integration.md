@@ -3,10 +3,10 @@ id: FEAT-001
 title: Git integration
 status: active
 implementation_status: shipped_unverified
-version: 0.24.0
+version: 0.26.0
 owners: [Parth Patel]
 created: 2026-11-09
-last_updated: 2026-11-15
+last_updated: 2026-11-21
 last_verified_commit: none
 ---
 
@@ -371,6 +371,11 @@ Every command runs with `LC_ALL=C`, `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS
 | AC-119 | A known suffix highlights; an unknown or extensionless file, the conflict view, and the binary view stay plain. |
 | AC-120 | A side over 4,000 lines or 200,000 characters renders plain without loading the chunk. |
 | AC-121 | Both AI commit actions send the Session id with the staged patch and the recent subjects, and a provider that routes by session, such as OpenCode Go, answers instead of failing with a missing-session error. A caller without a Session sends no id. |
+| AC-131 | The split diff draws one tick per change block on the right edge of the right pane. Its top and height are the block's first row and row count over the diff row count. |
+| AC-132 | A tick is green for an addition, red for a deletion, and blue for a modification, through `--dsw-*` tokens with no literal color. |
+| AC-133 | The unified diff draws one rail and maps a modified block to its removed and added lines, so the tick spans both. |
+| AC-134 | The rail sits outside the scroller, never intercepts pointer events, and leaves the scrollbar drag and the change navigation untouched. |
+| AC-135 | A conflict diff, a binary diff, and a diff with no blocks draw no rail. |
 
 ## 14. Security and privacy
 
@@ -598,6 +603,35 @@ The share is a ratio written to the panes as `flex-grow`, not a pixel width, so 
 - The divider sits on the right edge of the 52px gutter rather than in its middle. The gutter itself is not a drag target, because the change arrows occupy most of it.
 - The 120px floor is applied while dragging and from the keyboard. A stored ratio is not re-clamped when the panel narrows, so a very narrow panel can show one pane under 120px until the divider is moved again.
 
+### Change marks on the diff scrollbar
+
+**Status: Implemented, unverified in the running page.** The client was reviewed in the working tree; the document as a whole has no verified commit.
+
+The diff toolbar already names the change count and moves between changes, but the scrollbar is the native one, so a file whose changes sit far above or below the viewport gives no hint of where they are. JetBrains paints a short tick on the scrollbar for every changed region; this section adds the same overview to the diff.
+
+The change rail is an 8px, pointer-transparent column on the right edge of the diff scroll area. It draws one tick per change block from `DiffPayload.blocks`, positioned by the block's first display row and sized by the block's display rows over the whole file. The split diff uses the row index; the unified diff maps a modified row to the two lines it renders, so the tick covers the removed and the added line. Ticks use the host tokens: the added marker for an addition, the deleted marker for a deletion, and the business primary for a modification, which is the color the file list already uses for `M`. The rail is decorative (`aria-hidden`), takes no pointer events, adds no preference, and changes no host payload. A diff shorter than the viewport still draws the rail, so the ticks keep marking where the changes sit when there is no scrollbar.
+
+**Acceptance criteria and tests.**
+
+| ID | Criterion | Verification |
+| --- | --- | --- |
+| AC-131 | The split diff draws one tick per change block on the right edge of the right pane. Its top and height are the block's first row and row count over the diff row count. | Client test with a fixed row list. |
+| AC-132 | A tick is green for an addition, red for a deletion, and blue for a modification, through `--dsw-*` tokens with no literal color. | Client test reads the class; visual check. |
+| AC-133 | The unified diff draws one rail and maps a modified block to its removed and added lines, so the tick spans both. | Client test after switching layout. |
+| AC-134 | The rail sits outside the scroller, never intercepts pointer events, and leaves the scrollbar drag and the change navigation untouched. | Client test for placement and `aria-hidden`; visual check for the drag. |
+| AC-135 | A conflict diff, a binary diff, and a diff with no blocks draw no rail. | Client test for the empty diff and the conflict view. |
+
+**Implementation map.** [Client](../../src/client/main.ts) adds the rail component and its CSS rules; [client tests](../../tests/client.test.mjs) add the cases; generated output is [client bundle](../../client.js).
+
+**Validation.** `npm run typecheck`, `npm run build`, and `npm test` pass; the suite reports 91 passing tests, 40 of them client cases. Four new client cases cover the split rail and its three blocks, the unified mapping of a modified row to its two lines, the token-only colors, and the empty diff; the conflict and binary cases also assert no rail. A harness page loaded the built `client.js`, React, and the theme tokens extracted from `app.asar`, and rendered a 259-line diff containing a modification, a deletion, and an addition. The split view drew three ticks at 15.5, 70.2, and 82.2 percent, and the unified view at 380 pixels drew a 5.7-pixel modified tick and 2.9-pixel one-line ticks. The overlay painted above both the transparent track and the grey thumb in this Chromium. Dragging the thumb under the rail moved the scroll position from 720 to 2,411, so the rail does not block the scrollbar. The live sidebar was not opened, because the running web surface needs the token printed by its launcher.
+
+**Risks.**
+
+- The rail is an overlay on the native scrollbar. The harness Chromium painted it above the track and above the thumb, but the host's Electron build is a different Chromium; a paint order with the opaque thumb above the rail would hide a tick under the thumb. The thumb marks the visible viewport, so the hidden changes would be the ones already on screen.
+- Ticks are positioned proportionally to the content, while the browser's thumb stops shrinking below a minimum height. On a diff with tens of thousands of rows the two can disagree by a few pixels near the bottom.
+- One tick element per block. A pathological diff with thousands of one-line blocks adds that many nodes. The rows themselves are already one node per line.
+- If the host ever switches the panel to overlay scrollbars, the 8px rail would sit over the right padding of the code instead of a reserved scrollbar strip.
+
 ## 20. Rollout
 
 Install as a bundle and enable it in Plugins. Open the right sidebar, then the **Git changes** card in the Start guide. No migration. The browser stores the list width, the diff share, the layout choice, the AI preferences, and the repository pick.
@@ -626,6 +660,8 @@ These were open during design and are decided for 0.6.0.
 | Start-guide card | A `guide` entry on the `ctx.sidebarRightTabs` type, with the Git mark. |
 
 ## 23. Changelog
+
+- 2026-11-21: 0.26.0. The diff scroll area gains a change rail: one short tick per change block on the right edge, green for an addition, red for a deletion, and blue for a modification. The split view positions ticks by diff row; the unified view maps a modified row to its removed and added lines. The rail is 8 pixels wide over the native scrollbar, takes no pointer events, adds no preference, and changes no host payload. Typecheck, build, and 91 tests pass; a harness render of the real bundle checked both layouts, and a scrollbar drag still works through the rail.
 
 - 2026-11-15: the AI commit message request now carries the Session id. OpenCode Go routes each request by that header and refused the commit message with a 400 missing-session error; the request prompt is unchanged.
 
@@ -674,6 +710,7 @@ Status is partial: the core flows work, and the remaining gaps are named rather 
 | Diff syntax colors | Done in the client bundle test and the build. The live panel was not re-checked in the running app. |
 | Stage and unstage a whole file, or every file in a section | Done. |
 | Previous and next change with a change count | Done. |
+| Change marks on the diff scrollbar | Done. The rail draws one tick per block in the split and unified views and in History commit diffs; the client suite covers placement, color, the unified mapping, and the empty, conflict, and binary cases. Seen in a harness page with the host theme, not in the running sidebar. |
 | AI commit message and AI branch and commit | Done. Host call through `ctx.llm`; the model comes from Settings and can be overridden on the Git settings page. |
 | Horizontal mode tabs, two-panel body | Done. |
 | Draggable list and diff divider | Done in both views. Verified with a stub store run; not seen in the running page. |
